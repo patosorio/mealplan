@@ -1,9 +1,11 @@
 from schemas.meal_plan import (
     DayMeals,
+    DayPlan,
     GeneratePlanRequest,
     GeneratedMealRead,
     MealItem,
     MealPlanRead,
+    MealPlanResponse,
     NutritionAvg,
 )
 from schemas.pantry import (
@@ -22,10 +24,12 @@ from schemas.user import UserPreferencesRead, UserPreferencesUpdate, UserProfile
 __all__ = [
     # meal_plan
     "DayMeals",
+    "DayPlan",
     "GeneratePlanRequest",
     "GeneratedMealRead",
     "MealItem",
     "MealPlanRead",
+    "MealPlanResponse",
     "NutritionAvg",
     # pantry
     "GenerateShoppingListRequest",

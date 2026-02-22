@@ -2,14 +2,16 @@ from __future__ import annotations
 
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.dependencies import get_current_db_user
 from db.session import get_db
-from models import GeneratedMeal, User, UserRecipe
+from models import GeneratedMeal, MealPlan, User, UserRecipe
 from schemas import RecipeRead, SaveFromPlanRequest, SaveFromPlanResponse
+from services.profile_service import rebuild_taste_profile
+from services.recipe_service import search_recipes as svc_search
 from services.signal_service import log_signal
 
 router = APIRouter(prefix="/recipes", tags=["recipes"])
@@ -30,52 +32,31 @@ async def list_recipes(
 
 @router.get("/search", response_model=list[RecipeRead])
 async def search_recipes(
-    q: str = Query(..., min_length=1, description="Search query"),
+    q: str = Query(..., min_length=1, max_length=200, description="Search query"),
     user: User = Depends(get_current_db_user),
     db: AsyncSession = Depends(get_db),
 ) -> list[UserRecipe]:
     """
-    Keyword search across recipe names and descriptions.
-    Phase 3 upgrades this to pgvector semantic search via Gemini embeddings.
+    Semantic search (pgvector + Gemini text-embedding-004) across saved recipes.
+    Falls back to ILIKE keyword search when no embeddings exist yet.
     """
     await log_signal(db, user.id, "recipe_search", {"query": q})
-
-    like = f"%{q}%"
-    result = await db.execute(
-        select(UserRecipe)
-        .where(
-            UserRecipe.user_id == user.id,
-            UserRecipe.name.ilike(like) | UserRecipe.description.ilike(like),
-        )
-        .order_by(UserRecipe.created_at.desc())
-        .limit(20)
-    )
-    return list(result.scalars().all())
+    return await svc_search(db, user.id, q)
 
 
-@router.post("/save-from-plan", response_model=SaveFromPlanResponse)
+@router.post("/save-from-plan", response_model=SaveFromPlanResponse, status_code=201)
 async def save_from_plan(
     body: SaveFromPlanRequest,
+    background_tasks: BackgroundTasks,
     user: User = Depends(get_current_db_user),
     db: AsyncSession = Depends(get_db),
 ) -> UserRecipe:
     """
     Bookmark a generated meal into the user's recipe collection.
     Marks generated_meals.saved = True and writes a user_recipes row.
-    Phase 3 will also trigger corpus ingestion + pgvector embedding.
+    Triggers corpus re-upload and taste profile rebuild as background tasks.
     """
-    result = await db.execute(
-        select(GeneratedMeal).where(
-            GeneratedMeal.meal_plan_id == body.meal_plan_id,
-            GeneratedMeal.day == body.day,
-            GeneratedMeal.meal_type == body.meal_type,
-            GeneratedMeal.user_id == user.id,
-        )
-    )
-    meal = result.scalar_one_or_none()
-    if meal is None:
-        raise HTTPException(status_code=404, detail="Generated meal not found.")
-
+    # Reject duplicate saves early
     existing = await db.execute(
         select(UserRecipe).where(
             UserRecipe.user_id == user.id,
@@ -87,7 +68,55 @@ async def save_from_plan(
     if existing.scalar_one_or_none() is not None:
         raise HTTPException(status_code=409, detail="Meal already saved to recipes.")
 
-    meal.saved = True
+    # Look up GeneratedMeal row (exists only after "Save Plan" has been called)
+    result = await db.execute(
+        select(GeneratedMeal).where(
+            GeneratedMeal.meal_plan_id == body.meal_plan_id,
+            GeneratedMeal.day == body.day,
+            GeneratedMeal.meal_type == body.meal_type,
+            GeneratedMeal.user_id == user.id,
+        )
+    )
+    meal = result.scalar_one_or_none()
+
+    if meal is None:
+        # Plan not yet explicitly saved — read meal data from plan_data JSON
+        # and create the GeneratedMeal row on-the-fly so bookmarking works
+        # immediately after generation without requiring "Save Plan" first.
+        plan_result = await db.execute(
+            select(MealPlan).where(
+                MealPlan.id == body.meal_plan_id,
+                MealPlan.user_id == user.id,
+            )
+        )
+        plan = plan_result.scalar_one_or_none()
+        if plan is None:
+            raise HTTPException(status_code=404, detail="Meal plan not found.")
+
+        meal_data: dict | None = (
+            plan.plan_data.get("days", {}).get(body.day, {}).get(body.meal_type)
+        )
+        if not meal_data or not isinstance(meal_data, dict):
+            raise HTTPException(
+                status_code=404,
+                detail=f"Meal '{body.meal_type}' not found for day '{body.day}'.",
+            )
+
+        meal = GeneratedMeal(
+            user_id=user.id,
+            meal_plan_id=body.meal_plan_id,
+            day=body.day,
+            meal_type=body.meal_type,
+            name=meal_data["name"],
+            type=meal_data.get("type", ""),
+            description=meal_data.get("description"),
+            tags=meal_data.get("tags", []),
+            prep_minutes=meal_data.get("prep_minutes"),
+            saved=True,
+        )
+        db.add(meal)
+    else:
+        meal.saved = True
 
     recipe = UserRecipe(
         user_id=user.id,
@@ -111,6 +140,12 @@ async def save_from_plan(
         "type": meal.type,
         "prep_minutes": meal.prep_minutes,
     })
+
+    # Fire-and-forget: re-embed all recipes + re-upload corpus + rebuild profile
+    from services.ai.corpus_manager import upsert_user_corpus
+
+    background_tasks.add_task(upsert_user_corpus, db, user.id)
+    background_tasks.add_task(rebuild_taste_profile, db, user.id)
 
     return recipe
 

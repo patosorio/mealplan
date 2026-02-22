@@ -44,3 +44,6 @@ npm-debug.log*
 docs/ARCHITECTURE.md
 docs/NEXT_STEPS.md
 raw-vegan-meal-plan-branding.html
+scripts/setup_scheduler.sh
+scripts/setup_secrets.sh
+.cursor/

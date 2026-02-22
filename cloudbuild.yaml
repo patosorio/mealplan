@@ -1,0 +1,72 @@
+steps:
+  # ── Backend: build & push ────────────────────────────────────────────────────
+  - name: "gcr.io/cloud-builders/docker"
+    id: build-backend
+    args:
+      - build
+      - -t
+      - "${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_AR_REPO}/backend:${SHORT_SHA}"
+      - -t
+      - "${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_AR_REPO}/backend:latest"
+      - ./backend
+
+  - name: "gcr.io/cloud-builders/docker"
+    id: push-backend
+    waitFor: ["build-backend"]
+    args:
+      - push
+      - "--all-tags"
+      - "${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_AR_REPO}/backend"
+
+  # ── Backend: deploy to Cloud Run ─────────────────────────────────────────────
+  - name: "gcr.io/google.com/cloudsdktool/cloud-sdk"
+    id: deploy-backend
+    waitFor: ["push-backend"]
+    entrypoint: gcloud
+    args:
+      - run
+      - deploy
+      - patri-eats-backend
+      - --image=${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_AR_REPO}/backend:${SHORT_SHA}
+      - --region=${_REGION}
+      - --platform=managed
+      - --no-allow-unauthenticated
+      - --min-instances=1
+      - --max-instances=10
+      - --memory=1Gi
+      - --cpu=1
+      - --set-secrets=ANTHROPIC_API_KEY=anthropic_api_key:latest,GEMINI_API_KEY=gemini_api_key:latest,DATABASE_URL=database_url:latest,FIREBASE_SERVICE_ACCOUNT_PATH=firebase_sa_path:latest,UPSTASH_REDIS_URL=upstash_redis_url:latest
+      - --set-env-vars=ENVIRONMENT=production,CORS_ORIGINS=https://${PROJECT_ID}.web.app
+
+  # ── Frontend: install & build ────────────────────────────────────────────────
+  - name: "node:20"
+    id: build-frontend
+    dir: frontend
+    entrypoint: sh
+    args:
+      - -c
+      - |
+        npm ci && \
+        NEXT_PUBLIC_API_URL=https://patri-eats-backend-${_BACKEND_HASH}.${_REGION}.run.app \
+        npm run build
+
+  # ── Frontend: deploy to Firebase Hosting ────────────────────────────────────
+  - name: "gcr.io/firebase-tools/firebase"
+    id: deploy-frontend
+    waitFor: ["build-frontend"]
+    args:
+      - hosting:deploy
+      - --project=${PROJECT_ID}
+      - --only=hosting
+    dir: frontend
+
+substitutions:
+  _REGION: europe-west1
+  _AR_REPO: patri-eats
+  _BACKEND_HASH: ""  # Set to the Cloud Run URL hash for your project
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+  machineType: E2_HIGHCPU_8
+
+timeout: 1800s

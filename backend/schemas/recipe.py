@@ -34,6 +34,8 @@ class SaveFromPlanRequest(BaseModel):
 
 
 class SaveFromPlanResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: uuid.UUID
     name: str
     source: str

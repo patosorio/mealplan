@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import uuid
-from typing import Any
+from typing import Any, Literal
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -10,11 +10,21 @@ from models import UserSignal
 
 logger = logging.getLogger(__name__)
 
+SignalType = Literal[
+    "plan_generated",
+    "plan_saved",
+    "saved_meal",
+    "regenerated_day",
+    "recipe_search",
+    "shopping_purchased",
+    "opened_recipe",
+]
+
 
 async def log_signal(
     db: AsyncSession,
     user_id: uuid.UUID,
-    signal_type: str,
+    signal_type: SignalType,
     payload: dict[str, Any],
 ) -> None:
     """

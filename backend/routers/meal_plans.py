@@ -11,25 +11,24 @@ from core.dependencies import get_current_db_user
 from db.session import get_db
 from models import GeneratedMeal, MealPlan, User
 from schemas import GeneratePlanRequest, GeneratedMealRead, MealPlanRead
+from services.meal_plan_service import generate_and_persist, regenerate_day
 from services.signal_service import log_signal
 
 router = APIRouter(prefix="/meal-plans", tags=["meal plans"])
 
 
-@router.post("/generate", response_model=MealPlanRead)
+@router.post("/generate", response_model=MealPlanRead, status_code=201)
 async def generate_meal_plan(
     body: GeneratePlanRequest,
     user: User = Depends(get_current_db_user),
     db: AsyncSession = Depends(get_db),
-) -> None:
+) -> MealPlan:
     """
-    Generate a personalised 7-day meal plan via the AI pipeline.
-    Phase 3 — not yet implemented.
+    Generate a personalised 7-day plant-based meal plan via the AI pipeline.
+    Returns the persisted MealPlan with plan_data ready for immediate display.
+    Call POST /{id}/save to flatten meals into individual queryable rows.
     """
-    raise HTTPException(
-        status_code=501,
-        detail="Meal plan generation requires the AI service (Phase 3).",
-    )
+    return await generate_and_persist(request=body, user_id=user.id, db=db)
 
 
 @router.get("", response_model=list[MealPlanRead])
@@ -111,6 +110,36 @@ async def delete_meal_plan(
     plan = await _get_plan_or_404(db, plan_id, user.id)
     await db.delete(plan)
     await db.commit()
+
+
+_VALID_DAYS = frozenset(
+    {"monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"}
+)
+
+
+@router.post("/{plan_id}/regenerate-day", response_model=MealPlanRead)
+async def regenerate_plan_day(
+    plan_id: uuid.UUID,
+    day: str = Query(..., description="Day to regenerate, e.g. 'monday'"),
+    user: User = Depends(get_current_db_user),
+    db: AsyncSession = Depends(get_db),
+) -> MealPlan:
+    """
+    Regenerate a single day in an existing meal plan.
+    Replaces that day's meals in plan_data with freshly generated ones.
+    Logs a regenerated_day signal.
+    """
+    if day.lower() not in _VALID_DAYS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Invalid day '{day}'. Must be one of: {sorted(_VALID_DAYS)}.",
+        )
+    return await regenerate_day(
+        db=db,
+        plan_id=plan_id,
+        day=day.lower(),
+        user_id=user.id,
+    )
 
 
 @router.get("/{plan_id}/meals", response_model=list[GeneratedMealRead])

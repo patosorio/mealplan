@@ -2,20 +2,20 @@ from __future__ import annotations
 
 import uuid
 from datetime import date, datetime
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_validator
 
 
 class MealItem(BaseModel):
     """A single meal within a generated day plan."""
 
     name: str
-    type: str  # 'raw' | 'cooked'
+    type: Literal["raw", "cooked"]
     description: str
     tags: list[str]
     prep_minutes: int
-    source: str  # 'generated' | 'user_recipe'
+    source: Literal["generated", "user_recipe", "corpus"] = "generated"
 
 
 class DayMeals(BaseModel):
@@ -25,12 +25,47 @@ class DayMeals(BaseModel):
     snacks: list[str] = []
 
 
+# Alias used for Claude output validation — all meals required
+class DayPlan(BaseModel):
+    breakfast: MealItem
+    lunch: MealItem
+    dinner: MealItem
+    snacks: list[str] = []
+
+
 class NutritionAvg(BaseModel):
-    calories: float
-    protein_g: float
-    carbs_g: float
-    fat_g: float
-    fiber_g: float
+    calories: int
+    protein_g: int
+    carbs_g: int
+    fat_g: int
+    fiber_g: int
+
+
+# ── Claude output schema ───────────────────────────────────────────────────────
+
+_VALID_DAYS = frozenset(
+    {"monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"}
+)
+
+
+class MealPlanResponse(BaseModel):
+    """
+    Validated output from Claude. Every call to claude_generator.generate_plan()
+    must produce an instance of this before the result is persisted to DB.
+    """
+
+    plan_id: uuid.UUID
+    week_start: date
+    nutrition_avg: NutritionAvg
+    days: dict[str, DayPlan]
+
+    @field_validator("days")
+    @classmethod
+    def _all_days_present(cls, v: dict[str, DayPlan]) -> dict[str, DayPlan]:
+        missing = _VALID_DAYS - set(v.keys())
+        if missing:
+            raise ValueError(f"Missing days in meal plan: {sorted(missing)}")
+        return v
 
 
 class GeneratePlanRequest(BaseModel):

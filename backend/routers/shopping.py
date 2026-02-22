@@ -9,8 +9,9 @@ from sqlalchemy.orm.attributes import flag_modified
 
 from core.dependencies import get_current_db_user
 from db.session import get_db
-from models import MealPlan, PantryItem, ShoppingList, User
+from models import ShoppingList, User
 from schemas import GenerateShoppingListRequest, ShoppingItemToggle, ShoppingListRead
+from services.shopping_service import generate_shopping_list as svc_generate
 from services.signal_service import log_signal
 
 router = APIRouter(prefix="/shopping", tags=["shopping"])
@@ -25,51 +26,11 @@ async def generate_shopping_list(
     """
     Diff the meal plan's ingredient list against the user's pantry and
     produce a shopping list with only the missing items.
-
-    Phase 3 will enrich this with Claude-parsed ingredient quantities.
-    For now, ingredients are extracted from plan_data if present.
     """
-    plan_result = await db.execute(
-        select(MealPlan).where(
-            MealPlan.id == body.meal_plan_id, MealPlan.user_id == user.id
-        )
-    )
-    plan = plan_result.scalar_one_or_none()
-    if plan is None:
-        raise HTTPException(status_code=404, detail="Meal plan not found.")
-
-    pantry_result = await db.execute(
-        select(PantryItem).where(PantryItem.user_id == user.id)
-    )
-    pantry_names = {
-        p.name.lower() for p in pantry_result.scalars().all()
-    }
-
-    raw_ingredients: list[str] = []
-    for day_meals in plan.plan_data.get("days", {}).values():
-        for meal_type, meal in day_meals.items():
-            if meal_type == "snacks" or not isinstance(meal, dict):
-                continue
-            for ingredient in meal.get("ingredients", []):
-                name = ingredient if isinstance(ingredient, str) else ingredient.get("name", "")
-                if name:
-                    raw_ingredients.append(name)
-
-    shopping_items = [
-        {"name": name, "qty": None, "category": None, "checked": False}
-        for name in dict.fromkeys(raw_ingredients)
-        if name.lower() not in pantry_names
-    ]
-
-    shopping_list = ShoppingList(
-        user_id=user.id,
-        meal_plan_id=plan.id,
-        items=shopping_items,
-    )
-    db.add(shopping_list)
-    await db.commit()
-    await db.refresh(shopping_list)
-    return shopping_list
+    try:
+        return await svc_generate(db, user.id, body.meal_plan_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
 
 
 @router.get("/{list_id}", response_model=ShoppingListRead)
