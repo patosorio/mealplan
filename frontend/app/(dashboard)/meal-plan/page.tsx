@@ -19,7 +19,7 @@ export default function MealPlanPage() {
   const regenerateDayMutation = useRegenerateDay();
   const saveFromPlanMutation = useSaveFromPlan();
 
-  const [savedMealIds, setSavedMealIds] = useState<Set<string>>(new Set());
+  const [savedMealIds, setSavedMealIds] = useState<Map<string, string>>(new Map());
   const [error, setError] = useState<string | null>(null);
   const [saveSuccess, setSaveSuccess] = useState(false);
 
@@ -54,15 +54,15 @@ export default function MealPlanPage() {
     }
   }
 
-  async function handleBookmark(meal: MealItem, day: DayName, slot: MealSlot) {
+  async function handleBookmark(_meal: MealItem, day: DayName, slot: MealSlot) {
     if (!plan) return;
     const key = `${plan.id}-${day}-${slot}`;
-    await saveFromPlanMutation.mutateAsync({
+    const saved = await saveFromPlanMutation.mutateAsync({
       meal_plan_id: plan.id,
       day,
       meal_type: slot,
     });
-    setSavedMealIds((prev) => new Set([...prev, key]));
+    setSavedMealIds((prev) => new Map([...prev, [key, saved.id]]));
   }
 
   // Use the regenerated plan data if available

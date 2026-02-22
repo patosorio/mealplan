@@ -15,15 +15,15 @@ export default function SavedPlanPage({
   const { id } = use(params);
   const { data: plan, isLoading, error } = useMealPlan(id);
   const saveFromPlanMutation = useSaveFromPlan();
-  const [savedMealIds, setSavedMealIds] = useState<Set<string>>(new Set());
+  const [savedMealIds, setSavedMealIds] = useState<Map<string, string>>(new Map());
 
   async function handleBookmark(_meal: MealItem, day: DayName, slot: MealSlot) {
-    await saveFromPlanMutation.mutateAsync({
+    const saved = await saveFromPlanMutation.mutateAsync({
       meal_plan_id: id,
       day,
       meal_type: slot,
     });
-    setSavedMealIds((prev) => new Set([...prev, `${id}-${day}-${slot}`]));
+    setSavedMealIds((prev) => new Map([...prev, [`${id}-${day}-${slot}`, saved.id]]));
   }
 
   if (isLoading) {

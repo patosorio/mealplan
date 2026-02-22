@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useState } from "react";
 import type { DayName, MealItem, MealSlot } from "@/lib/types";
 
@@ -10,6 +11,7 @@ interface MealCardProps {
   planId: string;
   onBookmark?: (meal: MealItem, day: DayName, slot: MealSlot) => Promise<void>;
   isBookmarked?: boolean;
+  savedRecipeId?: string;
 }
 
 const SLOT_LABELS: Record<MealSlot, string> = {
@@ -25,6 +27,7 @@ export function MealCard({
   planId,
   onBookmark,
   isBookmarked = false,
+  savedRecipeId,
 }: MealCardProps) {
   const [bookmarking, setBookmarking] = useState(false);
   const [bookmarked, setBookmarked] = useState(isBookmarked);
@@ -107,6 +110,20 @@ export function MealCard({
       >
         {meal.description}
       </p>
+
+      {/* View recipe link — appears once saved */}
+      {savedRecipeId && (
+        <Link
+          href={`/recipes/${savedRecipeId}`}
+          className="inline-flex items-center gap-1 font-mono text-[10px] uppercase tracking-[0.12em] transition-opacity hover:opacity-70"
+          style={{ color: "var(--sage)" }}
+        >
+          View recipe
+          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+            <polyline points="9 18 15 12 9 6" />
+          </svg>
+        </Link>
+      )}
 
       {/* Footer: tags + prep time */}
       <div className="flex items-center justify-between flex-wrap gap-2">

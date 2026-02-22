@@ -1,4 +1,5 @@
 import { auth } from "./firebase";
+import type { RecipeExpanded } from "./types";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
@@ -23,4 +24,8 @@ export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> 
   }
 
   return res.json() as Promise<T>;
+}
+
+export async function expandRecipe(recipeId: string): Promise<RecipeExpanded> {
+  return apiFetch<RecipeExpanded>(`/recipes/${recipeId}/expand`);
 }

@@ -17,7 +17,14 @@ from schemas.pantry import (
     ShoppingItemToggle,
     ShoppingListRead,
 )
-from schemas.recipe import RecipeRead, SaveFromPlanRequest, SaveFromPlanResponse
+from schemas.recipe import (
+    RecipeExpandedRead,
+    RecipeIngredient,
+    RecipeRead,
+    RecipeStep,
+    SaveFromPlanRequest,
+    SaveFromPlanResponse,
+)
 from schemas.signals import UserSignalCreate, UserTasteProfileRead
 from schemas.user import UserPreferencesRead, UserPreferencesUpdate, UserProfile
 
@@ -40,7 +47,10 @@ __all__ = [
     "ShoppingItemToggle",
     "ShoppingListRead",
     # recipe
+    "RecipeExpandedRead",
+    "RecipeIngredient",
     "RecipeRead",
+    "RecipeStep",
     "SaveFromPlanRequest",
     "SaveFromPlanResponse",
     # signals

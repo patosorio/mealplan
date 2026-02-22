@@ -96,3 +96,27 @@ export interface SaveFromPlanResponse {
   origin_meal: string | null;
   created_at: string;
 }
+
+export interface RecipeIngredient {
+  name: string;
+  amount: string;
+  notes: string;
+}
+
+export interface RecipeStep {
+  step: number;
+  instruction: string;
+}
+
+export interface RecipeExpanded {
+  id: string;
+  name: string;
+  description: string | null;
+  tags: string[];
+  diet_type: string | null;
+  prep_minutes: number | null;
+  ingredients: RecipeIngredient[];
+  steps: RecipeStep[];
+  source: string;
+  created_at: string;
+}

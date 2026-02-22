@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiFetch } from "@/lib/api";
+import type { RecipeExpanded } from "@/lib/types";
 
 export interface Recipe {
   id: string;
@@ -19,6 +20,8 @@ export interface Recipe {
   updated_at: string;
 }
 
+export { type RecipeExpanded };
+
 export function useRecipes() {
   return useQuery({
     queryKey: ["recipes"],
@@ -34,6 +37,15 @@ export function useSearchRecipes(query: string) {
         `/recipes/search?q=${encodeURIComponent(query)}`
       ),
     enabled: query.trim().length > 0,
+  });
+}
+
+export function useExpandRecipe(id: string) {
+  return useQuery({
+    queryKey: ["recipes", id, "expand"],
+    queryFn: () => apiFetch<RecipeExpanded>(`/recipes/${id}/expand`),
+    enabled: !!id,
+    staleTime: Infinity,
   });
 }
 

@@ -9,9 +9,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from core.dependencies import get_current_db_user
 from db.session import get_db
 from models import GeneratedMeal, MealPlan, User, UserRecipe
-from schemas import RecipeRead, SaveFromPlanRequest, SaveFromPlanResponse
+from schemas import RecipeExpandedRead, RecipeRead, SaveFromPlanRequest, SaveFromPlanResponse
 from services.profile_service import rebuild_taste_profile
-from services.recipe_service import search_recipes as svc_search
+from services.recipe_service import (
+    expand_recipe_background,
+    get_or_expand_recipe,
+    search_recipes as svc_search,
+)
 from services.signal_service import log_signal
 
 router = APIRouter(prefix="/recipes", tags=["recipes"])
@@ -141,10 +145,24 @@ async def save_from_plan(
         "prep_minutes": meal.prep_minutes,
     })
 
-    # Fire-and-forget: rebuild taste profile
+    # Fire-and-forget: rebuild taste profile + pre-expand new recipe
     background_tasks.add_task(rebuild_taste_profile, db, user.id)
+    background_tasks.add_task(expand_recipe_background, db, recipe.id, user.id)
 
     return recipe
+
+
+@router.get("/{recipe_id}/expand", response_model=RecipeExpandedRead)
+async def get_expanded_recipe(
+    recipe_id: uuid.UUID,
+    user: User = Depends(get_current_db_user),
+    db: AsyncSession = Depends(get_db),
+) -> UserRecipe:
+    """
+    Get a saved recipe with full ingredients and steps.
+    Generates and caches them on first call if not yet expanded.
+    """
+    return await get_or_expand_recipe(db, recipe_id, user.id)
 
 
 @router.get("/{recipe_id}", response_model=RecipeRead)

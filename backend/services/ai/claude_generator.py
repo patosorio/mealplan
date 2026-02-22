@@ -24,7 +24,6 @@ from schemas.meal_plan import MealPlanResponse
 
 logger = logging.getLogger(__name__)
 
-_MODEL = "claude-haiku-3-5-20251001"
 _MAX_TOKENS = 8192
 _MAX_RETRIES = 2
 
@@ -240,7 +239,7 @@ async def generate_plan(
     for attempt in range(_MAX_RETRIES + 1):
         try:
             response = await client.messages.create(
-                model=_MODEL,
+                model=settings.claude_model,
                 max_tokens=_MAX_TOKENS,
                 system=system,
                 messages=messages,  # type: ignore[arg-type]

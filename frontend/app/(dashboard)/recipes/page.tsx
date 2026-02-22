@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useState } from "react";
 import { useRecipes, useSearchRecipes, useDeleteRecipe } from "@/lib/api/recipes";
 import type { Recipe } from "@/lib/api/recipes";
@@ -123,12 +124,14 @@ function RecipeCard({
       style={{ background: "white", border: "1px solid rgba(122,158,126,0.15)" }}
     >
       <div className="flex items-start justify-between gap-2">
-        <h3
-          className="font-display font-light text-[1rem] leading-snug flex-1"
-          style={{ color: "var(--deep-green)" }}
-        >
-          {recipe.name}
-        </h3>
+        <Link href={`/recipes/${recipe.id}`} className="flex-1 min-w-0">
+          <h3
+            className="font-display font-light text-[1rem] leading-snug hover:underline underline-offset-2"
+            style={{ color: "var(--deep-green)" }}
+          >
+            {recipe.name}
+          </h3>
+        </Link>
         <button
           onClick={onDelete}
           disabled={isDeleting}

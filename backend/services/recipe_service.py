@@ -1,18 +1,21 @@
 from __future__ import annotations
 
 """
-Recipe service — pgvector semantic search and bookmark post-processing.
+Recipe service — pgvector semantic search, bookmark post-processing,
+and on-demand recipe expansion.
 """
 
 import logging
 import uuid
 
+from fastapi import HTTPException
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from models import UserRecipe
 from services.ai.gemini_embedder import embed_query
+from services.ai.recipe_expander import expand_recipe
 
 logger = logging.getLogger(__name__)
 
@@ -92,3 +95,86 @@ async def search_recipes(
 
     # Fallback: no embeddings yet (new user)
     return await keyword_search(db, user_id, query)
+
+
+async def get_or_expand_recipe(
+    db: AsyncSession,
+    recipe_id: uuid.UUID,
+    user_id: uuid.UUID,
+) -> UserRecipe:
+    """
+    Fetch a user recipe. If ingredients/steps are empty, call Claude to
+    expand it, persist the result, and return the updated recipe.
+
+    If Claude fails the recipe is returned as-is with empty lists — the user
+    is never blocked from viewing their saved recipe.
+    """
+    result = await db.execute(
+        select(UserRecipe).where(
+            UserRecipe.id == recipe_id,
+            UserRecipe.user_id == user_id,
+        )
+    )
+    recipe = result.scalar_one_or_none()
+    if recipe is None:
+        raise HTTPException(status_code=404, detail="Recipe not found.")
+
+    if recipe.ingredients:
+        return recipe
+
+    try:
+        ingredients, steps = await expand_recipe(
+            name=recipe.name,
+            description=recipe.description,
+            tags=recipe.tags or [],
+            diet_type=recipe.diet_type,
+            prep_minutes=recipe.prep_minutes,
+        )
+        recipe.ingredients = ingredients
+        recipe.steps = steps
+        await db.commit()
+        await db.refresh(recipe)
+    except Exception:
+        logger.exception(
+            "Recipe expansion failed for recipe_id=%s — returning unexpanded recipe",
+            recipe_id,
+        )
+
+    return recipe
+
+
+async def expand_recipe_background(
+    db: AsyncSession,
+    recipe_id: uuid.UUID,
+    user_id: uuid.UUID,
+) -> None:
+    """
+    Background task: expand a freshly bookmarked recipe so it's ready
+    before the user navigates to the detail page.
+    Silently swallows all errors — this is best-effort pre-warming.
+    """
+    try:
+        result = await db.execute(
+            select(UserRecipe).where(
+                UserRecipe.id == recipe_id,
+                UserRecipe.user_id == user_id,
+            )
+        )
+        recipe = result.scalar_one_or_none()
+        if recipe is None or recipe.ingredients:
+            return
+
+        ingredients, steps = await expand_recipe(
+            name=recipe.name,
+            description=recipe.description,
+            tags=recipe.tags or [],
+            diet_type=recipe.diet_type,
+            prep_minutes=recipe.prep_minutes,
+        )
+        recipe.ingredients = ingredients
+        recipe.steps = steps
+        await db.commit()
+    except Exception:
+        logger.exception(
+            "Background expansion failed for recipe_id=%s", recipe_id
+        )

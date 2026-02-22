@@ -14,7 +14,7 @@ interface MealPlanViewProps {
   onSavePlan?: () => Promise<void>;
   isRegenerating?: boolean;
   isSaving?: boolean;
-  savedMealIds?: Set<string>;
+  savedMealIds?: Map<string, string>;
 }
 
 export function MealPlanView({
@@ -91,9 +91,8 @@ export function MealPlanView({
         {(["breakfast", "lunch", "dinner"] as MealSlot[]).map((slot) => {
           const meal = dayPlan[slot];
           if (!meal) return null;
-          const bookmarked = savedMealIds
-            ? savedMealIds.has(`${plan.id}-${activeDay}-${slot}`)
-            : false;
+          const key = `${plan.id}-${activeDay}-${slot}`;
+          const savedRecipeId = savedMealIds?.get(key);
           return (
             <MealCard
               key={slot}
@@ -102,7 +101,8 @@ export function MealPlanView({
               day={activeDay}
               planId={plan.id}
               onBookmark={onBookmark}
-              isBookmarked={bookmarked}
+              isBookmarked={!!savedRecipeId}
+              savedRecipeId={savedRecipeId}
             />
           );
         })}

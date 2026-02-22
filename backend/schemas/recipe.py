@@ -4,7 +4,38 @@ import uuid
 from datetime import datetime
 from typing import Any, Optional
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_validator
+
+
+class RecipeIngredient(BaseModel):
+    name: str
+    amount: str
+    notes: str = ""
+
+    @field_validator("notes", mode="before")
+    @classmethod
+    def coerce_notes(cls, v: object) -> str:
+        return "" if v is None else str(v)
+
+
+class RecipeStep(BaseModel):
+    step: int
+    instruction: str
+
+
+class RecipeExpandedRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    name: str
+    description: Optional[str] = None
+    tags: list[str]
+    diet_type: Optional[str] = None
+    prep_minutes: Optional[int] = None
+    ingredients: list[RecipeIngredient]
+    steps: list[RecipeStep]
+    source: str
+    created_at: datetime
 
 
 class RecipeRead(BaseModel):
