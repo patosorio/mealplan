@@ -9,7 +9,7 @@ from core.config import settings
 from core.rate_limit import RateLimitMiddleware
 from db.session import engine
 from models import Base
-from routers import auth, internal, meal_plans, pantry, preferences, recipes, shopping
+from routers import auth, internal, meal_plans, pantry, preferences, recipe_import, recipes, shopping
 
 _IS_PRODUCTION = settings.environment == "production"
 
@@ -45,6 +45,7 @@ app.include_router(auth.router)
 app.include_router(preferences.router)
 app.include_router(meal_plans.router)
 app.include_router(meal_plans.generated_router)
+app.include_router(recipe_import.router)
 app.include_router(recipes.router)
 app.include_router(pantry.router)
 app.include_router(shopping.router)

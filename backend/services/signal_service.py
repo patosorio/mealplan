@@ -14,6 +14,7 @@ SignalType = Literal[
     "plan_generated",
     "plan_saved",
     "saved_meal",
+    "added_recipe",
     "regenerated_day",
     "recipe_search",
     "shopping_purchased",

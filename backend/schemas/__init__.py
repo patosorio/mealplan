@@ -18,7 +18,9 @@ from schemas.pantry import (
     ShoppingListRead,
 )
 from schemas.recipe import (
+    RecipeDraft,
     RecipeExpandedRead,
+    RecipeImportConfirmRequest,
     RecipeIngredient,
     RecipeRead,
     RecipeStep,
@@ -47,7 +49,9 @@ __all__ = [
     "ShoppingItemToggle",
     "ShoppingListRead",
     # recipe
+    "RecipeDraft",
     "RecipeExpandedRead",
+    "RecipeImportConfirmRequest",
     "RecipeIngredient",
     "RecipeRead",
     "RecipeStep",

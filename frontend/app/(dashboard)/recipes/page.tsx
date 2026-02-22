@@ -28,16 +28,29 @@ export default function RecipesPage() {
 
   return (
     <div className="space-y-8">
-      <div>
-        <p className="font-mono text-[11px] uppercase tracking-[0.2em] mb-3" style={{ color: "var(--sage)" }}>
-          My Recipes
-        </p>
-        <h1
-          className="font-display font-light leading-tight"
-          style={{ fontSize: "clamp(2rem,4vw,3rem)", color: "var(--deep-green)" }}
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <p className="font-mono text-[11px] uppercase tracking-[0.2em] mb-3" style={{ color: "var(--sage)" }}>
+            My Recipes
+          </p>
+          <h1
+            className="font-display font-light leading-tight"
+            style={{ fontSize: "clamp(2rem,4vw,3rem)", color: "var(--deep-green)" }}
+          >
+            Your saved <em className="italic" style={{ color: "var(--terracotta)" }}>favourites</em>
+          </h1>
+        </div>
+        <Link
+          href="/recipes/import"
+          className="shrink-0 inline-flex items-center gap-2 px-4 py-2.5 rounded-lg font-mono text-[10px] uppercase tracking-[0.15em] transition-opacity hover:opacity-80 mt-1"
+          style={{ background: "var(--deep-green)", color: "var(--cream)" }}
         >
-          Your saved <em className="italic" style={{ color: "var(--terracotta)" }}>favourites</em>
-        </h1>
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5}>
+            <line x1="12" y1="5" x2="12" y2="19" />
+            <line x1="5" y1="12" x2="19" y2="12" />
+          </svg>
+          Add Recipe
+        </Link>
       </div>
 
       {/* Search bar */}
@@ -92,6 +105,15 @@ export default function RecipesPage() {
           <p className="font-display italic" style={{ color: "var(--text-muted)" }}>
             {activeQuery ? "No recipes found for that search." : "No saved recipes yet. Bookmark meals from your plan!"}
           </p>
+          {!activeQuery && (
+            <Link
+              href="/recipes/import"
+              className="font-mono text-[10px] uppercase tracking-[0.15em] transition-opacity hover:opacity-70"
+              style={{ color: "var(--sage)" }}
+            >
+              + Import your own recipe
+            </Link>
+          )}
         </div>
       ) : (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">

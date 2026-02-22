@@ -26,6 +26,30 @@ export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> 
   return res.json() as Promise<T>;
 }
 
+/**
+ * Like apiFetch but omits Content-Type so the browser can set the
+ * multipart/form-data boundary automatically when sending FormData.
+ */
+export async function apiFetchForm<T>(path: string, body: FormData): Promise<T> {
+  const user = auth.currentUser;
+  if (!user) throw new Error("Not authenticated");
+
+  const token = await user.getIdToken();
+
+  const res = await fetch(`${API_URL}${path}`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}` },
+    body,
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`API error ${res.status}: ${text}`);
+  }
+
+  return res.json() as Promise<T>;
+}
+
 export async function expandRecipe(recipeId: string): Promise<RecipeExpanded> {
   return apiFetch<RecipeExpanded>(`/recipes/${recipeId}/expand`);
 }

@@ -120,3 +120,25 @@ export interface RecipeExpanded {
   source: string;
   created_at: string;
 }
+
+export interface RecipeDraft {
+  name: string;
+  description: string;
+  ingredients: RecipeIngredient[];
+  steps: RecipeStep[];
+  tags: string[];
+  diet_type: string | null;
+  prep_minutes: number | null;
+  extraction_confidence: "high" | "medium" | "low";
+  input_interpretation: string;
+}
+
+export interface RecipeImportConfirmRequest {
+  name: string;
+  description: string;
+  ingredients: RecipeIngredient[];
+  steps: RecipeStep[];
+  tags: string[];
+  diet_type: string | null;
+  prep_minutes: number | null;
+}

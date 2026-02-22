@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { apiFetch } from "@/lib/api";
-import type { RecipeExpanded } from "@/lib/types";
+import { apiFetch, apiFetchForm } from "@/lib/api";
+import type { RecipeDraft, RecipeExpanded, RecipeImportConfirmRequest } from "@/lib/types";
 
 export interface Recipe {
   id: string;
@@ -54,6 +54,30 @@ export function useDeleteRecipe() {
   return useMutation({
     mutationFn: (id: string) =>
       apiFetch<void>(`/recipes/${id}`, { method: "DELETE" }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["recipes"] });
+    },
+  });
+}
+
+export async function extractRecipe(
+  text?: string,
+  image?: File,
+): Promise<RecipeDraft> {
+  const form = new FormData();
+  if (text) form.append("text", text);
+  if (image) form.append("image", image);
+  return apiFetchForm<RecipeDraft>("/recipes/import/extract", form);
+}
+
+export function useConfirmRecipe() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (draft: RecipeImportConfirmRequest) =>
+      apiFetch<RecipeExpanded>("/recipes/import/confirm", {
+        method: "POST",
+        body: JSON.stringify(draft),
+      }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["recipes"] });
     },

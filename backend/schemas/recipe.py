@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, field_validator
 
@@ -56,6 +56,32 @@ class RecipeRead(BaseModel):
     origin_meal: Optional[str] = None
     created_at: datetime
     updated_at: datetime
+
+
+class RecipeDraft(BaseModel):
+    """Returned by /import/extract — not yet saved to DB."""
+
+    name: str
+    description: str
+    ingredients: list[RecipeIngredient]
+    steps: list[RecipeStep]
+    tags: list[str]
+    diet_type: str | None
+    prep_minutes: int | None
+    extraction_confidence: Literal["high", "medium", "low"]
+    input_interpretation: str
+
+
+class RecipeImportConfirmRequest(BaseModel):
+    """User-edited draft sent back for saving."""
+
+    name: str
+    description: str
+    ingredients: list[RecipeIngredient]
+    steps: list[RecipeStep]
+    tags: list[str]
+    diet_type: str | None = None
+    prep_minutes: int | None = None
 
 
 class SaveFromPlanRequest(BaseModel):
