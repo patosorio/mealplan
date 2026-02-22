@@ -1,0 +1,46 @@
+# ── Secrets & local config ───────────────────────────────────────────────────
+backend/.env
+backend/.env.*
+backend/firebase-service-account.json
+backend/core/firebase-service-account.json
+frontend/.env.local
+frontend/.env*.local
+
+# ── Python ────────────────────────────────────────────────────────────────────
+backend/venv/
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+**/*.pyd
+*.egg-info/
+.eggs/
+dist/
+build/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+coverage.xml
+
+# ── Node / Next.js ────────────────────────────────────────────────────────────
+**/node_modules/
+frontend/.next/
+frontend/out/
+
+# ── OS ────────────────────────────────────────────────────────────────────────
+**/.DS_Store
+Thumbs.db
+
+# ── IDE ───────────────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+
+# ── Logs ─────────────────────────────────────────────────────────────────────
+*.log
+npm-debug.log*
+
+# ── Project-specific (not for repo) ──────────────────────────────────────────
+docs/ARCHITECTURE.md
+docs/NEXT_STEPS.md
+raw-vegan-meal-plan-branding.html
