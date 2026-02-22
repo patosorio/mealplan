@@ -3,17 +3,12 @@ from __future__ import annotations
 """
 AI pipeline orchestrator.
 
-Wires together:
-  Step 1 — gemini_retriever: fetch candidate recipes from corpus
-  Step 2 — claude_generator: generate the 7-day plan from candidates
-
-Injected context (personalisation):
-  - user_taste_profiles  (from DB)
-  - user_preferences     (from DB)
-  - pantry_items         (from DB)
-  - user recipe corpus file_id (from user_recipes)
+Single-call architecture:
+  1. Load user context in parallel (saved recipes, taste profile, pantry, preferences)
+  2. Claude generates the full 7-day plan from scratch
 """
 
+import asyncio
 import logging
 import uuid
 from datetime import date
@@ -24,9 +19,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from models import PantryItem, UserPreferences, UserRecipe, UserTasteProfile
 from schemas.meal_plan import MealPlanResponse
-from services.ai import claude_generator, gemini_retriever
+from services.ai import claude_generator
 
 logger = logging.getLogger(__name__)
+
+_MAX_USER_RECIPES = 30
 
 
 async def run_pipeline(
@@ -43,49 +40,50 @@ async def run_pipeline(
     """
     Full meal plan generation pipeline.
 
-    1. Load personalisation context from DB
-    2. Gemini retrieves candidates
-    3. Claude generates the plan
+    Loads personalisation context from DB in parallel, then calls Claude once
+    to generate the complete 7-day plan.
     Returns a validated MealPlanResponse ready for persistence.
     """
-    # ── Load personalisation context ──────────────────────────────────────────
-    taste_profile, pantry_items, user_corpus_file_id, recent_meals = await _load_context(
-        db, user_id
+    # ── Load all context in parallel ──────────────────────────────────────────
+    (
+        user_recipes,
+        taste_profile,
+        pantry_items,
+        prefs,
+    ) = await asyncio.gather(
+        _load_user_recipes(db, user_id),
+        _load_taste_profile(db, user_id),
+        _load_pantry_items(db, user_id),
+        _load_preferences(db, user_id),
     )
 
     # Merge DB preferences with request overrides
-    prefs_row = await db.execute(
-        select(UserPreferences).where(UserPreferences.user_id == user_id)
-    )
-    prefs = prefs_row.scalar_one_or_none()
-    if prefs:
+    if prefs is not None:
         if not exclude_ingredients and prefs.excluded_ingredients:
             exclude_ingredients = list(prefs.excluded_ingredients)
         if not preferences_text and prefs.preferences_text:
             preferences_text = prefs.preferences_text
 
-    # ── Step 1: Gemini retrieval ───────────────────────────────────────────────
-    logger.info("Running Gemini retrieval for user %s", user_id)
-    candidates = await gemini_retriever.retrieve_candidates(
-        diet_type=diet_type,
-        exclude_ingredients=exclude_ingredients,
-        preferences_text=preferences_text,
-        taste_summary=_format_taste_summary(taste_profile),
-        pantry_items=pantry_items,
-        user_corpus_file_id=user_corpus_file_id,
-    )
-    logger.info("Gemini returned %d candidates", len(candidates))
+    recent_meals: list[str] = taste_profile.get("recent_meal_names") or []
+    profile_dict: dict[str, Any] = {
+        k: v for k, v in taste_profile.items() if k != "recent_meal_names"
+    }
 
-    # ── Step 2: Claude generation ─────────────────────────────────────────────
-    logger.info("Running Claude generation for user %s plan_id %s", user_id, plan_id)
+    # ── Claude generation ─────────────────────────────────────────────────────
+    logger.info(
+        "Running Claude generation for user %s plan_id %s (%d saved recipes)",
+        user_id,
+        plan_id,
+        len(user_recipes),
+    )
     plan = await claude_generator.generate_plan(
-        candidates=candidates,
+        user_recipes=user_recipes,
         diet_type=diet_type,
         calories_target=calories_target,
         meals_per_day=meals_per_day,
         exclude_ingredients=exclude_ingredients,
         preferences_text=preferences_text,
-        taste_profile=taste_profile,
+        taste_profile=profile_dict,
         pantry_items=pantry_items,
         week_start=week_start,
         plan_id=plan_id,
@@ -124,58 +122,69 @@ async def run_day_pipeline(
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
-async def _load_context(
+
+async def _load_user_recipes(
     db: AsyncSession,
     user_id: uuid.UUID,
-) -> tuple[dict[str, Any], list[str], str | None, list[str]]:
-    """
-    Returns (taste_profile_dict, pantry_item_names, user_corpus_file_id, recent_meal_names).
-    """
-    # Taste profile
-    tp_result = await db.execute(
+) -> list[dict[str, Any]]:
+    """Return up to 30 most recent saved recipes as minimal dicts."""
+    result = await db.execute(
+        select(UserRecipe)
+        .where(UserRecipe.user_id == user_id)
+        .order_by(UserRecipe.created_at.desc())
+        .limit(_MAX_USER_RECIPES)
+    )
+    rows = list(result.scalars().all())
+    return [_serialise_recipe(r) for r in rows]
+
+
+def _serialise_recipe(recipe: UserRecipe) -> dict[str, Any]:
+    tags: list[str] = recipe.tags or []
+    # Infer type from tags; default to "cooked"
+    meal_type = "raw" if "raw" in tags else "cooked"
+    return {
+        "name": recipe.name,
+        "description": recipe.description or "",
+        "tags": tags,
+        "prep_minutes": recipe.prep_minutes,
+        "type": meal_type,
+    }
+
+
+async def _load_taste_profile(
+    db: AsyncSession,
+    user_id: uuid.UUID,
+) -> dict[str, Any]:
+    result = await db.execute(
         select(UserTasteProfile).where(UserTasteProfile.user_id == user_id)
     )
-    tp = tp_result.scalar_one_or_none()
-    taste_profile: dict[str, Any] = {}
-    recent_meals: list[str] = []
-    if tp:
-        taste_profile = {
-            "favourite_tags": tp.favourite_tags or [],
-            "disliked_signals": tp.disliked_signals or [],
-            "preferred_prep_time": tp.preferred_prep_time,
-            "actual_raw_ratio": tp.actual_raw_ratio,
-        }
-        recent_meals = tp.recent_meal_names or []
+    tp = result.scalar_one_or_none()
+    if tp is None:
+        return {}
+    return {
+        "favourite_tags": tp.favourite_tags or [],
+        "disliked_signals": tp.disliked_signals or [],
+        "preferred_prep_time": tp.preferred_prep_time,
+        "actual_raw_ratio": tp.actual_raw_ratio,
+        "recent_meal_names": tp.recent_meal_names or [],
+    }
 
-    # Pantry
-    pantry_result = await db.execute(
+
+async def _load_pantry_items(
+    db: AsyncSession,
+    user_id: uuid.UUID,
+) -> list[str]:
+    result = await db.execute(
         select(PantryItem.name).where(PantryItem.user_id == user_id)
     )
-    pantry_items: list[str] = list(pantry_result.scalars().all())
+    return list(result.scalars().all())
 
-    # Most recent user corpus file ID (from their latest bookmarked recipe)
-    recipe_result = await db.execute(
-        select(UserRecipe.corpus_file_id)
-        .where(
-            UserRecipe.user_id == user_id,
-            UserRecipe.corpus_file_id.isnot(None),
-        )
-        .order_by(UserRecipe.created_at.desc())
-        .limit(1)
+
+async def _load_preferences(
+    db: AsyncSession,
+    user_id: uuid.UUID,
+) -> UserPreferences | None:
+    result = await db.execute(
+        select(UserPreferences).where(UserPreferences.user_id == user_id)
     )
-    user_corpus_file_id: str | None = recipe_result.scalar_one_or_none()
-
-    return taste_profile, pantry_items, user_corpus_file_id, recent_meals
-
-
-def _format_taste_summary(taste_profile: dict[str, Any]) -> str:
-    if not taste_profile:
-        return ""
-    parts: list[str] = []
-    if fav := taste_profile.get("favourite_tags"):
-        parts.append(f"Loves: {', '.join(fav[:8])}")
-    if dis := taste_profile.get("disliked_signals"):
-        parts.append(f"Dislikes: {', '.join(dis[:5])}")
-    if prep := taste_profile.get("preferred_prep_time"):
-        parts.append(f"Prefers under {prep}min prep")
-    return ". ".join(parts)
+    return result.scalar_one_or_none()

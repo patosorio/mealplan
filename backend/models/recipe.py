@@ -47,9 +47,6 @@ class UserRecipe(Base):
     origin_day: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     origin_meal: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
-    # Gemini File Search — populated after corpus ingestion
-    corpus_file_id: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-
     # pgvector — used only by GET /recipes/search?q= semantic search
     embedding: Mapped[Optional[list[float]]] = mapped_column(
         Vector(768), nullable=True

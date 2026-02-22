@@ -54,7 +54,7 @@ async def save_from_plan(
     """
     Bookmark a generated meal into the user's recipe collection.
     Marks generated_meals.saved = True and writes a user_recipes row.
-    Triggers corpus re-upload and taste profile rebuild as background tasks.
+    Triggers taste profile rebuild as a background task.
     """
     # Reject duplicate saves early
     existing = await db.execute(
@@ -141,10 +141,7 @@ async def save_from_plan(
         "prep_minutes": meal.prep_minutes,
     })
 
-    # Fire-and-forget: re-embed all recipes + re-upload corpus + rebuild profile
-    from services.ai.corpus_manager import upsert_user_corpus
-
-    background_tasks.add_task(upsert_user_corpus, db, user.id)
+    # Fire-and-forget: rebuild taste profile
     background_tasks.add_task(rebuild_taste_profile, db, user.id)
 
     return recipe

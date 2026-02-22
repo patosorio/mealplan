@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 """
-Claude Sonnet meal plan generator.
+Claude Haiku meal plan generator.
 
-Receives candidate recipes from Gemini, injects personalisation context,
-and returns a fully validated MealPlanResponse. Retries on JSON parse
-failure with a corrective prompt.
+Receives the user's saved recipes and personalisation context, then returns a
+fully validated MealPlanResponse. Retries on JSON parse failure with a
+corrective prompt.
 """
 
 import asyncio
@@ -24,7 +24,7 @@ from schemas.meal_plan import MealPlanResponse
 
 logger = logging.getLogger(__name__)
 
-_MODEL = "claude-sonnet-4-5"
+_MODEL = "claude-haiku-3-5-20251001"
 _MAX_TOKENS = 8192
 _MAX_RETRIES = 2
 
@@ -33,7 +33,7 @@ _MAX_PREF_TEXT_LEN = 500
 _MAX_TAG_LEN = 60
 _MAX_INGREDIENT_LEN = 100
 _MAX_EXCLUDE_ITEMS = 30
-_MAX_CANDIDATES = 30
+_MAX_USER_RECIPES = 30
 _CONTROL_CHAR_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 
 
@@ -42,25 +42,24 @@ def _sanitize(value: str, max_len: int) -> str:
     return _CONTROL_CHAR_RE.sub("", value)[:max_len]
 
 
-def _sanitize_candidates(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Sanitize all string fields from untrusted candidate data."""
+def _sanitize_user_recipes(recipes: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Sanitize all string fields from untrusted user recipe data."""
     safe: list[dict[str, Any]] = []
-    for c in candidates[:_MAX_CANDIDATES]:
+    for r in recipes[:_MAX_USER_RECIPES]:
         safe.append(
             {
-                "name": _sanitize(str(c.get("name", "")), 200),
-                "description": _sanitize(str(c.get("description", "")), 500),
+                "name": _sanitize(str(r.get("name", "")), 200),
+                "description": _sanitize(str(r.get("description", "")), 500),
                 "tags": [
                     _sanitize(str(t), _MAX_TAG_LEN)
-                    for t in (c.get("tags") or [])[:15]
+                    for t in (r.get("tags") or [])[:15]
                 ],
-                "prep_minutes": int(c["prep_minutes"])
-                if str(c.get("prep_minutes", "")).isdigit()
+                "prep_minutes": int(r["prep_minutes"])
+                if str(r.get("prep_minutes", "")).isdigit()
                 else None,
-                "type": c.get("type", "cooked")
-                if c.get("type") in ("raw", "cooked")
+                "type": r.get("type", "cooked")
+                if r.get("type") in ("raw", "cooked")
                 else "cooked",
-                "source": c.get("source", "corpus"),
             }
         )
     return safe
@@ -77,7 +76,7 @@ def _build_system_prompt() -> str:
 
 
 def _build_user_prompt(
-    candidates: list[dict[str, Any]],
+    user_recipes: list[dict[str, Any]],
     diet_type: str,
     calories_target: int,
     meals_per_day: list[str],
@@ -89,7 +88,7 @@ def _build_user_prompt(
     plan_id: uuid.UUID,
     recent_meal_names: list[str],
 ) -> str:
-    safe_candidates = _sanitize_candidates(candidates)
+    safe_recipes = _sanitize_user_recipes(user_recipes)
     safe_prefs = (
         _sanitize(preferences_text, _MAX_PREF_TEXT_LEN) if preferences_text else None
     )
@@ -117,7 +116,7 @@ def _build_user_prompt(
                     "description": "...",
                     "tags": ["..."],
                     "prep_minutes": 15,
-                    "source": "generated|user_recipe|corpus",
+                    "source": "generated|user_recipe",
                 },
                 "lunch": {"...": "same structure"},
                 "dinner": {"...": "same structure"},
@@ -164,11 +163,20 @@ def _build_user_prompt(
             f"Preferred max prep time: {taste_profile['preferred_prep_time']} minutes."
         )
 
-    parts.append(
-        f"\nDraw from these {len(safe_candidates)} candidate recipes as inspiration "
-        "(you may adapt or combine them, or create new ones):\n"
-        + json.dumps(safe_candidates, indent=2)
-    )
+    if safe_recipes:
+        parts.append(
+            f"\nUSER'S SAVED RECIPES ({len(safe_recipes)} recipes):\n"
+            + json.dumps(safe_recipes, indent=2)
+            + "\nIncorporate these recipes into the plan where they fit the diet and "
+            "preferences. When you use one, set source=\"user_recipe\". "
+            "For any meal you create from scratch, set source=\"generated\"."
+        )
+    else:
+        parts.append(
+            "\nThis is a new user with no saved recipes. "
+            "Generate all meals from your own knowledge. "
+            "Set source=\"generated\" for every meal."
+        )
 
     parts.append(
         "\nReturn ONLY a JSON object matching this exact schema:\n"
@@ -188,12 +196,12 @@ def _extract_json(text: str) -> str:
     return text.strip()
 
 
-def _get_client() -> anthropic.Anthropic:
-    return anthropic.Anthropic(api_key=settings.anthropic_api_key)
+def _get_client() -> anthropic.AsyncAnthropic:
+    return anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
 
 
 async def generate_plan(
-    candidates: list[dict[str, Any]],
+    user_recipes: list[dict[str, Any]],
     diet_type: str,
     calories_target: int,
     meals_per_day: list[str],
@@ -206,14 +214,14 @@ async def generate_plan(
     recent_meal_names: list[str],
 ) -> MealPlanResponse:
     """
-    Call Claude Sonnet to generate a 7-day meal plan.
+    Call Claude Haiku to generate a 7-day meal plan.
     Validates the response with MealPlanResponse. Retries up to _MAX_RETRIES
     times with a corrective message on ValidationError or JSON parse failure.
     """
     client = _get_client()
     system = _build_system_prompt()
     user_msg = _build_user_prompt(
-        candidates=candidates,
+        user_recipes=user_recipes,
         diet_type=diet_type,
         calories_target=calories_target,
         meals_per_day=meals_per_day,
@@ -228,32 +236,26 @@ async def generate_plan(
 
     messages: list[dict[str, str]] = [{"role": "user", "content": user_msg}]
     last_error: str = ""
-    loop = asyncio.get_running_loop()
-
-    def _make_call(
-        msgs: list[dict[str, str]],
-    ) -> str:
-        response = client.messages.create(
-            model=_MODEL,
-            max_tokens=_MAX_TOKENS,
-            system=system,
-            messages=msgs,  # type: ignore[arg-type]
-        )
-        return response.content[0].text  # type: ignore[return-value]
 
     for attempt in range(_MAX_RETRIES + 1):
         try:
-            raw: str = await loop.run_in_executor(None, _make_call, list(messages))
-        except (anthropic.InternalServerError, anthropic.APITimeoutError) as _exc:
+            response = await client.messages.create(
+                model=_MODEL,
+                max_tokens=_MAX_TOKENS,
+                system=system,
+                messages=messages,  # type: ignore[arg-type]
+            )
+            raw: str = response.content[0].text  # type: ignore[index]
+        except (anthropic.InternalServerError, anthropic.APITimeoutError) as exc:
             logger.warning(
                 "Claude transient API error on attempt %d/%d (%s) — %s",
                 attempt + 1,
                 _MAX_RETRIES + 1,
-                type(_exc).__name__,
-                str(_exc)[:200],
+                type(exc).__name__,
+                str(exc)[:200],
             )
             if attempt < _MAX_RETRIES:
-                await asyncio.sleep(2**attempt)  # 1 s, 2 s backoff
+                await asyncio.sleep(2**attempt)
                 continue
             raise
         except Exception:
@@ -275,7 +277,6 @@ async def generate_plan(
             )
 
             if attempt < _MAX_RETRIES:
-                # Give Claude the error and ask it to fix the JSON
                 messages.append({"role": "assistant", "content": raw})
                 messages.append(
                     {
