@@ -60,12 +60,6 @@ class UserTasteProfile(Base):
     )
 
     # Positive signals
-    favourite_cuisines: Mapped[Optional[list[str]]] = mapped_column(
-        ARRAY(Text()), nullable=True
-    )
-    favourite_ingredients: Mapped[Optional[list[str]]] = mapped_column(
-        ARRAY(Text()), nullable=True
-    )
     favourite_tags: Mapped[Optional[list[str]]] = mapped_column(
         ARRAY(Text()), nullable=True
     )
@@ -80,7 +74,9 @@ class UserTasteProfile(Base):
         Integer, nullable=True
     )
     actual_raw_ratio: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
-    avg_weekly_plans: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    # TODO v2: add favourite_cuisines inferred from meal tags/names
+    # TODO v2: add favourite_ingredients inferred from recipe content
+    # TODO v2: add avg_weekly_plans from plan_generated signal count
 
     # Recent history — used to avoid repetition in next generation
     recent_meal_names: Mapped[Optional[list[str]]] = mapped_column(

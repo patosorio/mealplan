@@ -21,7 +21,7 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("GEMINI_API_KEY", "GOOGLE_API_KEY"),
     )
     firebase_project_id: str = ""
-    firebase_service_account_path: str = ""
+    firebase_service_account_json: str = ""
     database_url: str = (
         "postgresql+asyncpg://postgres:password@localhost:5432/mealplanner"
     )
@@ -31,6 +31,8 @@ class Settings(BaseSettings):
     cloud_run_url: str = ""
     # Upstash Redis URL for rate limiting (optional — rate limiting disabled if unset)
     upstash_redis_url: str = ""
+    # Shared secret for POST /internal/* endpoints — set via Secret Manager in prod
+    internal_secret: str = ""
 
     @model_validator(mode="after")
     def _require_ai_keys_in_production(self) -> "Settings":

@@ -13,6 +13,12 @@ from routers import auth, internal, meal_plans, pantry, preferences, recipe_impo
 
 _IS_PRODUCTION = settings.environment == "production"
 
+if _IS_PRODUCTION and any("localhost" in o for o in settings.cors_origins):
+    raise RuntimeError(
+        "CORS_ORIGINS contains 'localhost' but ENVIRONMENT=production. "
+        "Set CORS_ORIGINS to your production Firebase Hosting domain before starting."
+    )
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):  # type: ignore[type-arg]

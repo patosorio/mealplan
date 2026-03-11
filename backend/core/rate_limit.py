@@ -4,15 +4,15 @@ from __future__ import annotations
 Rate limiting via Upstash Redis.
 
 Uses a sliding-window counter (INCR + EXPIRE) over a Redis key scoped to
-(user_id, endpoint). Pure async — does not block the event loop.
+(firebase_uid, endpoint). Pure async — does not block the event loop.
 
 Configuration via env vars:
-  UPSTASH_REDIS_URL   — redis+tls://... or redis://...
-  UPSTASH_REDIS_TOKEN — (if using Upstash REST API; only needed for REST mode)
+  UPSTASH_REDIS_URL — redis+tls://... or redis://...
 """
 
+import base64
+import json
 import logging
-from typing import Callable
 
 import redis.asyncio as aioredis
 from fastapi import HTTPException, Request
@@ -23,9 +23,9 @@ from core.config import settings
 
 logger = logging.getLogger(__name__)
 
-# (path_prefix, per-hour limit)
+# (path_suffix, per-hour limit)
 _RATE_LIMITS: list[tuple[str, int]] = [
-    ("/meal-plans/generate", 10),
+    ("/meal-plans/generate", 5),
     ("/recipes/search", 60),
 ]
 
@@ -45,6 +45,33 @@ def _get_redis() -> aioredis.Redis | None:  # type: ignore[type-arg]
     except Exception:
         logger.warning("Could not connect to Upstash Redis — rate limiting disabled")
         return None
+
+
+def _extract_firebase_uid(authorization: str) -> str:
+    """
+    Decode the Firebase UID from a Bearer JWT without re-verifying the signature.
+    Firebase JWTs carry the UID in the `sub` (subject) claim of the payload.
+
+    Falls back to an anonymous key if the header is absent or malformed —
+    rate limiting degrades gracefully rather than blocking legitimate requests.
+    The actual signature verification still happens in get_current_user().
+    """
+    try:
+        parts = authorization.split(" ", 1)
+        if len(parts) != 2 or parts[0] != "Bearer":
+            return "anonymous"
+        token = parts[1].strip()
+        # JWT structure: header.payload.signature (all base64url-encoded)
+        payload_segment = token.split(".")[1]
+        # base64url may omit padding — add it back before decoding
+        padding = 4 - len(payload_segment) % 4
+        if padding != 4:
+            payload_segment += "=" * padding
+        payload = json.loads(base64.urlsafe_b64decode(payload_segment))
+        uid: str = payload.get("sub") or payload.get("uid") or "anonymous"
+        return uid
+    except Exception:
+        return "anonymous"
 
 
 async def _check_rate_limit(
@@ -96,8 +123,8 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         path = request.url.path
 
         matching_limit: int | None = None
-        for prefix, limit in _RATE_LIMITS:
-            if path.endswith(prefix) or path == prefix:
+        for suffix, limit in _RATE_LIMITS:
+            if path.endswith(suffix) or path == suffix:
                 matching_limit = limit
                 break
 
@@ -108,15 +135,11 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         if redis is None:
             return await call_next(request)
 
-        # Extract user_id from the verified Firebase token stored by auth middleware.
-        # We use the raw Authorization header value as a key proxy here (hashed via Redis).
-        # The actual user resolution happens in get_current_db_user — here we use
-        # the Firebase UID embedded in the token claims if available, else the token itself.
-        token_key = (request.headers.get("authorization") or "anonymous")[-32:]
+        uid = _extract_firebase_uid(request.headers.get("authorization") or "")
 
         await _check_rate_limit(
             redis=redis,
-            user_id=token_key,
+            user_id=uid,
             endpoint=path,
             limit=matching_limit,
         )

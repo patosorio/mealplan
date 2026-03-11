@@ -6,7 +6,7 @@ from collections import Counter
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import select, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from models import UserSignal, UserTasteProfile
@@ -107,42 +107,29 @@ async def _rebuild(db: AsyncSession, user_id: uuid.UUID) -> None:
 
     now = datetime.now(tz=timezone.utc)
 
-    # ── Upsert user_taste_profiles ─────────────────────────────────────────────
-    existing = await db.execute(
-        select(UserTasteProfile).where(UserTasteProfile.user_id == user_id)
+    # ── Atomic upsert — single round-trip, no SELECT needed ───────────────────
+    # ON CONFLICT (user_id) DO UPDATE replaces any prior row in one statement.
+    profile_values = dict(
+        user_id=user_id,
+        favourite_tags=top_tags,
+        disliked_signals=top_disliked,
+        preferred_prep_time=avg_prep,
+        actual_raw_ratio=actual_raw_ratio,
+        recent_meal_names=unique_meal_names[:30],
+        top_search_terms=unique_searches[:20],
+        signal_count=len(signals),
+        last_computed_at=now,
+        # TODO v2: add favourite_cuisines inferred from meal tags/names
     )
-    profile = existing.scalar_one_or_none()
-
-    if profile is None:
-        db.add(
-            UserTasteProfile(
-                user_id=user_id,
-                favourite_tags=top_tags,
-                disliked_signals=top_disliked,
-                preferred_prep_time=avg_prep,
-                actual_raw_ratio=actual_raw_ratio,
-                recent_meal_names=unique_meal_names[:30],
-                top_search_terms=unique_searches[:20],
-                signal_count=len(signals),
-                last_computed_at=now,
-            )
+    stmt = (
+        pg_insert(UserTasteProfile)
+        .values(**profile_values)
+        .on_conflict_do_update(
+            index_elements=["user_id"],
+            set_={k: v for k, v in profile_values.items() if k != "user_id"},
         )
-    else:
-        await db.execute(
-            update(UserTasteProfile)
-            .where(UserTasteProfile.user_id == user_id)
-            .values(
-                favourite_tags=top_tags,
-                disliked_signals=top_disliked,
-                preferred_prep_time=avg_prep,
-                actual_raw_ratio=actual_raw_ratio,
-                recent_meal_names=unique_meal_names[:30],
-                top_search_terms=unique_searches[:20],
-                signal_count=len(signals),
-                last_computed_at=now,
-            )
-        )
-
+    )
+    await db.execute(stmt)
     await db.commit()
     logger.info(
         "Rebuilt taste profile for user %s — %d signals processed",

@@ -1,6 +1,7 @@
 # ── Secrets & local config ───────────────────────────────────────────────────
 backend/.env
 backend/.env.*
+!backend/.env.example
 backend/firebase-service-account.json
 backend/core/firebase-service-account.json
 frontend/.env.local
@@ -47,3 +48,4 @@ raw-vegan-meal-plan-branding.html
 scripts/setup_scheduler.sh
 scripts/setup_secrets.sh
 .cursor/
+scripts/

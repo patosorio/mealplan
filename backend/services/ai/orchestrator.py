@@ -76,19 +76,32 @@ async def run_pipeline(
         plan_id,
         len(user_recipes),
     )
-    plan = await claude_generator.generate_plan(
-        user_recipes=user_recipes,
-        diet_type=diet_type,
-        calories_target=calories_target,
-        meals_per_day=meals_per_day,
-        exclude_ingredients=exclude_ingredients,
-        preferences_text=preferences_text,
-        taste_profile=profile_dict,
-        pantry_items=pantry_items,
-        week_start=week_start,
-        plan_id=plan_id,
-        recent_meal_names=recent_meals,
-    )
+    try:
+        plan = await asyncio.wait_for(
+            claude_generator.generate_plan(
+                user_recipes=user_recipes,
+                diet_type=diet_type,
+                calories_target=calories_target,
+                meals_per_day=meals_per_day,
+                exclude_ingredients=exclude_ingredients,
+                preferences_text=preferences_text,
+                taste_profile=profile_dict,
+                pantry_items=pantry_items,
+                week_start=week_start,
+                plan_id=plan_id,
+                recent_meal_names=recent_meals,
+            ),
+            timeout=50.0,
+        )
+    except asyncio.TimeoutError:
+        logger.error(
+            "Pipeline timeout for user %s plan_id %s — exceeded 50s", user_id, plan_id
+        )
+        from fastapi import HTTPException
+        raise HTTPException(
+            status_code=503,
+            detail="Meal plan generation timed out. Please try again.",
+        )
     return plan
 
 

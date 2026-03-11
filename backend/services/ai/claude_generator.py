@@ -24,7 +24,7 @@ from schemas.meal_plan import MealPlanResponse
 
 logger = logging.getLogger(__name__)
 
-_MAX_TOKENS = 8192
+_MAX_TOKENS = 4096
 _MAX_RETRIES = 2
 
 # Input sanitization constants
@@ -238,25 +238,48 @@ async def generate_plan(
 
     for attempt in range(_MAX_RETRIES + 1):
         try:
-            response = await client.messages.create(
-                model=settings.claude_model,
-                max_tokens=_MAX_TOKENS,
-                system=system,
-                messages=messages,  # type: ignore[arg-type]
+            response = await asyncio.wait_for(
+                client.messages.create(
+                    model=settings.claude_model,
+                    max_tokens=_MAX_TOKENS,
+                    system=system,
+                    messages=messages,  # type: ignore[arg-type]
+                ),
+                timeout=45.0,
             )
             raw: str = response.content[0].text  # type: ignore[index]
-        except (anthropic.InternalServerError, anthropic.APITimeoutError) as exc:
+        except asyncio.TimeoutError:
             logger.warning(
-                "Claude transient API error on attempt %d/%d (%s) — %s",
+                "Claude timed out on attempt %d/%d (45s)",
+                attempt + 1,
+                _MAX_RETRIES + 1,
+            )
+            if attempt < _MAX_RETRIES:
+                await asyncio.sleep(2**attempt)
+                continue
+            from fastapi import HTTPException
+            raise HTTPException(
+                status_code=503,
+                detail="Meal plan generation timed out. Please try again.",
+            )
+        except anthropic.APIError as exc:
+            logger.warning(
+                "Claude API error on attempt %d/%d (%s) — %s",
                 attempt + 1,
                 _MAX_RETRIES + 1,
                 type(exc).__name__,
                 str(exc)[:200],
             )
-            if attempt < _MAX_RETRIES:
+            if attempt < _MAX_RETRIES and isinstance(
+                exc, (anthropic.InternalServerError, anthropic.APITimeoutError)
+            ):
                 await asyncio.sleep(2**attempt)
                 continue
-            raise
+            from fastapi import HTTPException
+            raise HTTPException(
+                status_code=502,
+                detail=f"AI service error: {type(exc).__name__}. Please try again.",
+            )
         except Exception:
             logger.exception("Claude API call failed on attempt %d", attempt + 1)
             raise
