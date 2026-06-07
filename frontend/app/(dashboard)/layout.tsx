@@ -9,6 +9,7 @@ import type { User } from "firebase/auth";
 
 const NAV_LINKS = [
   { href: "/meal-plan", label: "Meal Plan" },
+  { href: "/calendar", label: "Calendar" },
   { href: "/history", label: "History" },
   { href: "/recipes", label: "Recipes" },
   { href: "/pantry", label: "Pantry" },
@@ -56,10 +57,10 @@ export default function DashboardLayout({
   }
 
   return (
-    <div className="min-h-screen" style={{ background: "var(--cream)" }}>
+    <div className="h-screen flex flex-col overflow-hidden" style={{ background: "var(--cream)" }}>
       {/* Nav */}
       <header
-        className="sticky top-0 z-50 px-6 py-4 flex items-center justify-between"
+        className="flex-shrink-0 sticky top-0 z-50 px-6 py-4 flex items-center justify-between"
         style={{
           background: "rgba(247,243,236,0.92)",
           borderBottom: "1px solid rgba(122,158,126,0.15)",
@@ -100,9 +101,11 @@ export default function DashboardLayout({
         </button>
       </header>
 
-      {/* Page content */}
-      <main className="max-w-5xl mx-auto px-4 py-8 md:px-8">
-        {children}
+      {/* Page content — scrollable by default; full-height pages control their own overflow */}
+      <main className="flex-1 overflow-y-auto min-h-0">
+        <div className="max-w-5xl mx-auto px-4 py-8 md:px-8 h-full">
+          {children}
+        </div>
       </main>
     </div>
   );

@@ -1,7 +1,8 @@
 // ── API response types (mirrors backend schemas) ─────────────────────────────
 
-export type MealType = "raw" | "cooked";
+export type MealType = "raw" | "cooked" | "juice";
 export type MealSlot = "breakfast" | "lunch" | "dinner";
+export type ExtraSlot = "morning_juice" | "morning_snack" | "afternoon_snack" | "evening_tea";
 export type DayName =
   | "monday"
   | "tuesday"
@@ -28,12 +29,36 @@ export interface MealItem {
   tags: string[];
   prep_minutes: number;
   source: "generated" | "user_recipe" | "corpus";
+  ingredients?: string[];
+}
+
+// ── Phase 8 types ─────────────────────────────────────────────────────────────
+
+export interface ExtraItem {
+  slot: ExtraSlot;
+  name: string;
+  type: MealType;
+  description: string;
+  prep_minutes: number;
+}
+
+export interface JuiceEntry {
+  label: string;
+  size_oz: 8 | 16 | 24 | 32;
+  size_label: string;
+}
+
+export interface JuicingConfig {
+  juices: JuiceEntry[];
+  solid_meals: MealSlot[];
 }
 
 export interface DayPlan {
-  breakfast: MealItem;
-  lunch: MealItem;
-  dinner: MealItem;
+  breakfast: MealItem | null;
+  lunch: MealItem | null;
+  dinner: MealItem | null;
+  juices: MealItem[];
+  extras: ExtraItem[];
   snacks: string[];
 }
 
@@ -45,14 +70,25 @@ export interface NutritionAvg {
   fiber_g: number;
 }
 
+export type PlanStatus = "draft" | "reviewing" | "approved";
+export type ApprovalStatus = "pending" | "accepted" | "swapped";
+
 export interface MealPlan {
   id: string;
   user_id: string;
   week_start: string;
   diet_type: string;
-  plan_data: { days: Record<DayName, DayPlan> };
+  plan_data: {
+    days: Record<DayName, DayPlan>;
+    nutrition_by_day?: Partial<Record<DayName, NutritionAvg>>;
+  };
   nutrition_avg: NutritionAvg;
   created_at: string;
+  // Phase 7
+  status: PlanStatus;
+  name: string | null;
+  scheduled_week: string | null;
+  approved_at: string | null;
 }
 
 export interface GeneratedMeal {
@@ -68,6 +104,9 @@ export interface GeneratedMeal {
   prep_minutes: number | null;
   saved: boolean;
   created_at: string;
+  // Phase 7
+  approval_status: ApprovalStatus;
+  edited_manually: boolean;
 }
 
 export interface GeneratePlanRequest {
@@ -79,12 +118,16 @@ export interface GeneratePlanRequest {
   exclude_ingredients: string[];
   preferences_text?: string;
   week_start: string;
+  // Phase 8 — optional
+  extras?: ExtraSlot[];
+  juicing_config?: JuicingConfig | null;
 }
 
 export interface SaveFromPlanRequest {
   meal_plan_id: string;
   day: string;
   meal_type: string;
+  juice_index?: number;
 }
 
 export interface SaveFromPlanResponse {
@@ -129,6 +172,7 @@ export interface RecipeDraft {
   tags: string[];
   diet_type: string | null;
   prep_minutes: number | null;
+  servings: number | null;
   extraction_confidence: "high" | "medium" | "low";
   input_interpretation: string;
 }
@@ -141,4 +185,28 @@ export interface RecipeImportConfirmRequest {
   tags: string[];
   diet_type: string | null;
   prep_minutes: number | null;
+  servings: number | null;
+}
+
+// ── Phase 7 request types ─────────────────────────────────────────────────────
+
+export interface PatchMealPlanRequest {
+  name?: string;
+  status?: PlanStatus;
+  scheduled_week?: string;
+}
+
+export interface ApprovePlanRequest {
+  name: string;
+  accept_all?: boolean;
+}
+
+export interface SchedulePlanRequest {
+  scheduled_week: string;
+}
+
+export interface PatchGeneratedMealRequest {
+  action: "accept" | "edit";
+  name?: string;
+  description?: string;
 }

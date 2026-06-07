@@ -12,9 +12,8 @@ class Settings(BaseSettings):
     )
 
     anthropic_api_key: str = ""
-    # Override with a newer model once your API key has access, e.g.:
-    # CLAUDE_MODEL=claude-3-5-haiku-20241022
-    claude_model: str = "claude-3-haiku-20240307"
+    # Override via CLAUDE_MODEL env var
+    claude_model: str = "claude-sonnet-4-6"
     # Accepts GEMINI_API_KEY (canonical) or GOOGLE_API_KEY (Google AI Studio default)
     gemini_api_key: str = Field(
         default="",

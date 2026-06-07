@@ -203,8 +203,10 @@ function ReviewPhase({
   const [name, setName] = useState(initial.name);
   const [description, setDescription] = useState(initial.description);
   const [prepMinutes, setPrepMinutes] = useState<number | "">(initial.prep_minutes ?? "");
+  const [servings, setServings] = useState<number | "">(initial.servings ?? 2);
   const [dietType, setDietType] = useState<string>(initial.diet_type ?? "plant-based");
   const [tags, setTags] = useState<string[]>(initial.tags);
+  const [customTag, setCustomTag] = useState("");
   const [ingredients, setIngredients] = useState<RecipeIngredient[]>(initial.ingredients);
   const [steps, setSteps] = useState<RecipeStep[]>(initial.steps);
   const [tagPickerOpen, setTagPickerOpen] = useState(false);
@@ -224,9 +226,20 @@ function ReviewPhase({
       tags,
       diet_type: dietType || null,
       prep_minutes: prepMinutes === "" ? null : Number(prepMinutes),
+      servings: servings === "" ? null : Number(servings),
     };
     await confirm.mutateAsync(body);
     router.push("/recipes");
+  }
+
+  function addCustomTag() {
+    const tag = customTag.trim().toLowerCase().replace(/\s+/g, "-");
+    if (!tag || tags.includes(tag)) {
+      setCustomTag("");
+      return;
+    }
+    setTags((prev) => [...prev, tag]);
+    setCustomTag("");
   }
 
   // ── Ingredients helpers ──
@@ -342,6 +355,20 @@ function ReviewPhase({
         </div>
         <div className="space-y-1.5">
           <label className="font-mono text-[10px] uppercase tracking-[0.15em]" style={{ color: "var(--sage)" }}>
+            Servings
+          </label>
+          <input
+            type="number"
+            min={1}
+            max={20}
+            value={servings}
+            onChange={(e) => setServings(e.target.value === "" ? "" : Number(e.target.value))}
+            className="w-24 px-3 py-2 rounded-lg font-mono text-[0.85rem] outline-none"
+            style={{ background: "white", border: "1px solid rgba(122,158,126,0.2)", color: "var(--deep-green)" }}
+          />
+        </div>
+        <div className="space-y-1.5">
+          <label className="font-mono text-[10px] uppercase tracking-[0.15em]" style={{ color: "var(--sage)" }}>
             Diet type
           </label>
           <select
@@ -391,23 +418,48 @@ function ReviewPhase({
         </div>
         {tagPickerOpen && (
           <div
-            className="flex flex-wrap gap-1.5 p-3 rounded-xl"
+            className="flex flex-wrap gap-1.5 p-3 rounded-xl space-y-2"
             style={{ background: "white", border: "1px solid rgba(122,158,126,0.2)" }}
           >
-            {VALID_TAGS.filter((t) => !tags.includes(t)).map((t) => (
-              <button
-                key={t}
-                type="button"
-                onClick={() => {
-                  setTags((prev) => [...prev, t]);
-                  setTagPickerOpen(false);
+            <div className="flex flex-wrap gap-1.5 w-full">
+              {VALID_TAGS.filter((t) => !tags.includes(t)).map((t) => (
+                <button
+                  key={t}
+                  type="button"
+                  onClick={() => {
+                    setTags((prev) => [...prev, t]);
+                    setTagPickerOpen(false);
+                  }}
+                  className="font-mono text-[10px] uppercase tracking-wide px-2 py-0.5 rounded-full transition-colors hover:opacity-80"
+                  style={{ background: "rgba(122,158,126,0.1)", color: "var(--sage)" }}
+                >
+                  {t}
+                </button>
+              ))}
+            </div>
+            <div className="flex gap-2 w-full">
+              <input
+                value={customTag}
+                onChange={(e) => setCustomTag(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    addCustomTag();
+                  }
                 }}
-                className="font-mono text-[10px] uppercase tracking-wide px-2 py-0.5 rounded-full transition-colors hover:opacity-80"
-                style={{ background: "rgba(122,158,126,0.1)", color: "var(--sage)" }}
+                placeholder="Custom tag…"
+                className="flex-1 px-3 py-1.5 rounded-lg font-mono text-[10px] outline-none"
+                style={{ background: "rgba(247,243,236,0.8)", border: "1px solid rgba(122,158,126,0.2)", color: "var(--deep-green)" }}
+              />
+              <button
+                type="button"
+                onClick={addCustomTag}
+                className="font-mono text-[10px] uppercase tracking-wide px-3 py-1.5 rounded-lg"
+                style={{ border: "1px solid rgba(122,158,126,0.3)", color: "var(--sage)" }}
               >
-                {t}
+                Add
               </button>
-            ))}
+            </div>
           </div>
         )}
       </div>
@@ -417,7 +469,7 @@ function ReviewPhase({
         <h2 className="font-mono text-[11px] uppercase tracking-[0.2em]" style={{ color: "var(--sage)" }}>
           Ingredients
           <span className="ml-1.5 normal-case tracking-normal font-normal" style={{ color: "var(--text-muted)" }}>
-            — 2 servings
+            — {servings === "" ? "?" : servings} servings
           </span>
         </h2>
         <div

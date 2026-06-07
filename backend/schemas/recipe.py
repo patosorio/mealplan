@@ -32,6 +32,7 @@ class RecipeExpandedRead(BaseModel):
     tags: list[str]
     diet_type: Optional[str] = None
     prep_minutes: Optional[int] = None
+    servings: Optional[int] = None
     ingredients: list[RecipeIngredient]
     steps: list[RecipeStep]
     source: str
@@ -50,6 +51,7 @@ class RecipeRead(BaseModel):
     tags: list[str]
     diet_type: Optional[str] = None
     prep_minutes: Optional[int] = None
+    servings: Optional[int] = None
     source: str
     origin_plan_id: Optional[uuid.UUID] = None
     origin_day: Optional[str] = None
@@ -68,6 +70,7 @@ class RecipeDraft(BaseModel):
     tags: list[str]
     diet_type: str | None
     prep_minutes: int | None
+    servings: int | None = None
     extraction_confidence: Literal["high", "medium", "low"]
     input_interpretation: str
 
@@ -82,12 +85,14 @@ class RecipeImportConfirmRequest(BaseModel):
     tags: list[str]
     diet_type: str | None = None
     prep_minutes: int | None = None
+    servings: int | None = None
 
 
 class SaveFromPlanRequest(BaseModel):
     meal_plan_id: uuid.UUID
     day: str
     meal_type: str
+    juice_index: int | None = None  # Phase 8 — set when saving a juice slot
 
 
 class SaveFromPlanResponse(BaseModel):

@@ -179,3 +179,88 @@ body {
     radial-gradient(ellipse at 20% 50%, rgba(122, 158, 126, 0.08) 0%, transparent 60%),
     radial-gradient(ellipse at 80% 20%, rgba(196, 122, 74, 0.07)  0%, transparent 50%);
 }
+
+.meal-plan-print-header {
+  display: none;
+}
+
+@media print {
+  @page {
+    size: landscape;
+    margin: 10mm;
+  }
+
+  header,
+  .no-print {
+    display: none !important;
+  }
+
+  html,
+  body,
+  main,
+  main > div {
+    background: white !important;
+    overflow: visible !important;
+    height: auto !important;
+    max-width: none !important;
+    width: 100% !important;
+    padding: 0 !important;
+    margin: 0 !important;
+  }
+
+  /* Only print the meal plan grid container */
+  body * {
+    visibility: hidden;
+  }
+
+  .meal-plan-print,
+  .meal-plan-print * {
+    visibility: visible;
+  }
+
+  .meal-plan-print {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    padding: 0;
+    background: white !important;
+  }
+
+  .meal-plan-print-header {
+    display: block !important;
+    margin-bottom: 8px;
+    padding-bottom: 6px;
+    border-bottom: 1px solid rgba(45, 74, 53, 0.2);
+  }
+
+  .meal-plan-print table {
+    width: 100% !important;
+    min-width: 0 !important;
+    font-size: 9px;
+    table-layout: fixed;
+  }
+
+  .meal-plan-print th,
+  .meal-plan-print td {
+    border: 1px solid rgba(45, 74, 53, 0.25) !important;
+    padding: 4px 3px !important;
+    vertical-align: top;
+  }
+
+  .meal-plan-print button {
+    border: none !important;
+    background: transparent !important;
+    padding: 0 !important;
+    min-height: 0 !important;
+    box-shadow: none !important;
+    cursor: default;
+  }
+
+  .meal-plan-print .line-clamp-2 {
+    -webkit-line-clamp: unset;
+    line-clamp: unset;
+    display: block;
+    overflow: visible;
+  }
+}

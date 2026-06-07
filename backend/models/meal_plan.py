@@ -30,6 +30,13 @@ class MealPlan(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
+    # Phase 7 — plan review & approval lifecycle
+    status: Mapped[str] = mapped_column(Text, nullable=False, server_default="draft")
+    name: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    scheduled_week: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    approved_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
 
 class GeneratedMeal(Base):
@@ -61,3 +68,13 @@ class GeneratedMeal(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
+    # Phase 7 — per-meal review actions
+    approval_status: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default="pending"
+    )
+    swapped_from_meal_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("generated_meals.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    edited_manually: Mapped[bool] = mapped_column(Boolean, server_default="false")

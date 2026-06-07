@@ -106,6 +106,7 @@ async def confirm_recipe(
         tags=body.tags,
         diet_type=body.diet_type,
         prep_minutes=body.prep_minutes,
+        servings=body.servings,
         source="user",
         origin_plan_id=None,
         origin_day=None,

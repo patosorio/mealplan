@@ -56,3 +56,8 @@ class ShoppingList(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
+    # Phase 7 — preserves plan name/week after plan deletion
+    # e.g. {"plan_name": "Juice Week March", "week_start": "2026-03-16", "diet_type": "..."}
+    plan_snapshot: Mapped[Optional[dict[str, Any]]] = mapped_column(
+        JSONB, nullable=True
+    )

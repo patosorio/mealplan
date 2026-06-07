@@ -45,6 +45,7 @@ async def semantic_search(
         .where(
             UserRecipe.user_id == user_id,
             UserRecipe.embedding.isnot(None),
+            UserRecipe.deleted_at.is_(None),
         )
         .order_by(
             UserRecipe.embedding.op("<=>")(query_vector)  # type: ignore[attr-defined]
@@ -73,6 +74,7 @@ async def keyword_search(
         .where(
             UserRecipe.user_id == user_id,
             UserRecipe.name.ilike(like) | UserRecipe.description.ilike(like),
+            UserRecipe.deleted_at.is_(None),
         )
         .order_by(UserRecipe.created_at.desc())
         .limit(limit)
@@ -113,6 +115,7 @@ async def get_or_expand_recipe(
         select(UserRecipe).where(
             UserRecipe.id == recipe_id,
             UserRecipe.user_id == user_id,
+            UserRecipe.deleted_at.is_(None),
         )
     )
     recipe = result.scalar_one_or_none()

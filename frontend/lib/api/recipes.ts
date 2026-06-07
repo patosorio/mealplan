@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiFetch, apiFetchForm } from "@/lib/api";
+import { useToast } from "@/lib/toast";
 import type { RecipeDraft, RecipeExpanded, RecipeImportConfirmRequest } from "@/lib/types";
 
 export interface Recipe {
@@ -22,10 +23,15 @@ export interface Recipe {
 
 export { type RecipeExpanded };
 
-export function useRecipes() {
+export function useRecipes(originPlanId?: string) {
   return useQuery({
-    queryKey: ["recipes"],
-    queryFn: () => apiFetch<Recipe[]>("/recipes"),
+    queryKey: originPlanId ? ["recipes", "by-plan", originPlanId] : ["recipes"],
+    queryFn: () =>
+      apiFetch<Recipe[]>(
+        originPlanId
+          ? `/recipes?origin_plan_id=${encodeURIComponent(originPlanId)}`
+          : "/recipes"
+      ),
   });
 }
 
@@ -51,11 +57,27 @@ export function useExpandRecipe(id: string) {
 
 export function useDeleteRecipe() {
   const qc = useQueryClient();
+  const { toast } = useToast();
+
   return useMutation({
     mutationFn: (id: string) =>
       apiFetch<void>(`/recipes/${id}`, { method: "DELETE" }),
-    onSuccess: () => {
+    onMutate: async (id) => {
+      await qc.cancelQueries({ queryKey: ["recipes"] });
+      const snapshots = qc.getQueriesData<Recipe[]>({ queryKey: ["recipes"] });
+      qc.setQueriesData<Recipe[]>({ queryKey: ["recipes"] }, (old) =>
+        Array.isArray(old) ? old.filter((r) => r.id !== id) : old
+      );
+      return { snapshots };
+    },
+    onSuccess: (_data, id) => {
+      toast("Recipe removed.");
       qc.invalidateQueries({ queryKey: ["recipes"] });
+      qc.removeQueries({ queryKey: ["recipes", id] });
+    },
+    onError: (_err, _id, ctx) => {
+      ctx?.snapshots?.forEach(([key, data]) => qc.setQueryData(key, data));
+      toast("Could not remove recipe.", "error");
     },
   });
 }

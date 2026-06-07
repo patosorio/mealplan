@@ -51,6 +51,7 @@ ONLY this JSON structure:
   "tags": ["only from VALID_TAGS list above"],
   "diet_type": "raw_vegan | vegan | plant-based",
   "prep_minutes": 20,
+  "servings": 2,
   "extraction_confidence": "high | medium | low",
   "input_interpretation": "One sentence describing what you understood the input to be"
 }}
@@ -58,7 +59,8 @@ ONLY this JSON structure:
 Rules:
 - ingredients: 2-15 items, realistic quantities for 2 servings
 - steps: 2-10 steps
-- tags: 2-6 tags, ONLY from the VALID_TAGS list
+- tags: 2-6 tags, prefer VALID_TAGS but include custom tags when they fit
+- servings: integer number of portions (default 2 if not stated)
 - If input is just a dish name with no details, set extraction_confidence="low"
   and generate a reasonable plant-based version of that dish
 - If input is a full recipe, set extraction_confidence="high"

@@ -36,6 +36,7 @@ class UserRecipe(Base):
     tags: Mapped[list[str]] = mapped_column(ARRAY(Text()), server_default="{}")
     diet_type: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     prep_minutes: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    servings: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     source: Mapped[str] = mapped_column(Text, server_default="user")
 
     # Set when source='ai_generated' — traces back to the originating plan
@@ -57,4 +58,8 @@ class UserRecipe(Base):
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+    # Phase 7 — soft-delete: NULL = active, non-NULL = deleted
+    deleted_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
     )

@@ -23,14 +23,18 @@ router = APIRouter(prefix="/recipes", tags=["recipes"])
 
 @router.get("", response_model=list[RecipeRead])
 async def list_recipes(
+    origin_plan_id: uuid.UUID | None = Query(None, description="Filter by originating meal plan"),
     user: User = Depends(get_current_db_user),
     db: AsyncSession = Depends(get_db),
 ) -> list[UserRecipe]:
-    result = await db.execute(
+    stmt = (
         select(UserRecipe)
-        .where(UserRecipe.user_id == user.id)
+        .where(UserRecipe.user_id == user.id, UserRecipe.deleted_at.is_(None))
         .order_by(UserRecipe.created_at.desc())
     )
+    if origin_plan_id is not None:
+        stmt = stmt.where(UserRecipe.origin_plan_id == origin_plan_id)
+    result = await db.execute(stmt)
     return list(result.scalars().all())
 
 
@@ -58,20 +62,82 @@ async def save_from_plan(
     """
     Bookmark a generated meal into the user's recipe collection.
     Marks generated_meals.saved = True and writes a user_recipes row.
+    Supports Phase 8 juice slots via juice_index (stored as origin_meal="juice_N").
     Triggers taste profile rebuild as a background task.
     """
-    # Reject duplicate saves early
+    # Canonical meal type key (e.g. "breakfast" or "juice_0")
+    origin_meal_key = (
+        f"juice_{body.juice_index}"
+        if body.juice_index is not None
+        else body.meal_type
+    )
+
+    # Reject duplicate saves — skip soft-deleted rows (user can re-save after delete)
     existing = await db.execute(
         select(UserRecipe).where(
             UserRecipe.user_id == user.id,
             UserRecipe.origin_plan_id == body.meal_plan_id,
             UserRecipe.origin_day == body.day,
-            UserRecipe.origin_meal == body.meal_type,
+            UserRecipe.origin_meal == origin_meal_key,
+            UserRecipe.deleted_at.is_(None),
         )
     )
-    if existing.scalar_one_or_none() is not None:
-        raise HTTPException(status_code=409, detail="Meal already saved to recipes.")
+    existing_recipe = existing.scalar_one_or_none()
+    if existing_recipe is not None:
+        return existing_recipe
 
+    # ── Juice path (Phase 8) ───────────────────────────────────────────────────
+    if body.juice_index is not None:
+        plan_result = await db.execute(
+            select(MealPlan).where(
+                MealPlan.id == body.meal_plan_id,
+                MealPlan.user_id == user.id,
+            )
+        )
+        plan = plan_result.scalar_one_or_none()
+        if plan is None:
+            raise HTTPException(status_code=404, detail="Meal plan not found.")
+
+        juices = plan.plan_data.get("days", {}).get(body.day, {}).get("juices", [])
+        if body.juice_index >= len(juices):
+            raise HTTPException(status_code=404, detail="Juice not found.")
+
+        juice_data = juices[body.juice_index]
+        juice_tags = list(juice_data.get("tags", []))
+        if "juice" not in juice_tags:
+            juice_tags.append("juice")
+        recipe = UserRecipe(
+            user_id=user.id,
+            name=juice_data.get("name", "Juice"),
+            description=juice_data.get("description"),
+            ingredients=[],
+            steps=[],
+            tags=juice_tags,
+            source="ai_generated",
+            origin_plan_id=body.meal_plan_id,
+            origin_day=body.day,
+            origin_meal=origin_meal_key,
+        )
+        db.add(recipe)
+        await db.commit()
+        await db.refresh(recipe)
+
+        await log_signal(
+            db,
+            user.id,
+            "recipe_bookmarked",
+            {
+                "recipe_id": str(recipe.id),
+                "meal_plan_id": str(body.meal_plan_id),
+                "day": body.day,
+                "meal_type": origin_meal_key,
+                "tags": recipe.tags,
+            },
+        )
+        background_tasks.add_task(rebuild_taste_profile, user.id)
+        return recipe
+
+    # ── Standard meal path ─────────────────────────────────────────────────────
     # Look up GeneratedMeal row (exists only after "Save Plan" has been called)
     result = await db.execute(
         select(GeneratedMeal).where(
@@ -122,17 +188,21 @@ async def save_from_plan(
     else:
         meal.saved = True
 
+    meal_tags = list(meal.tags or [])
+    if meal.type and meal.type not in meal_tags:
+        meal_tags.append(meal.type)
+
     recipe = UserRecipe(
         user_id=user.id,
         name=meal.name,
         description=meal.description,
         ingredients=[],
         steps=[],
-        tags=meal.tags or [],
+        tags=meal_tags,
         source="ai_generated",
         origin_plan_id=body.meal_plan_id,
         origin_day=body.day,
-        origin_meal=body.meal_type,
+        origin_meal=origin_meal_key,
     )
     db.add(recipe)
     await db.commit()
@@ -180,8 +250,23 @@ async def delete_recipe(
     user: User = Depends(get_current_db_user),
     db: AsyncSession = Depends(get_db),
 ) -> None:
-    recipe = await _get_recipe_or_404(db, recipe_id, user.id)
-    await db.delete(recipe)
+    from datetime import datetime, timezone
+
+    result = await db.execute(
+        select(UserRecipe).where(
+            UserRecipe.id == recipe_id,
+            UserRecipe.user_id == user.id,
+        )
+    )
+    recipe = result.scalar_one_or_none()
+    if recipe is None:
+        raise HTTPException(status_code=404, detail="Recipe not found.")
+
+    # Idempotent — already soft-deleted
+    if recipe.deleted_at is not None:
+        return
+
+    recipe.deleted_at = datetime.now(timezone.utc)
     await db.commit()
 
 
@@ -192,7 +277,9 @@ async def _get_recipe_or_404(
 ) -> UserRecipe:
     result = await db.execute(
         select(UserRecipe).where(
-            UserRecipe.id == recipe_id, UserRecipe.user_id == user_id
+            UserRecipe.id == recipe_id,
+            UserRecipe.user_id == user_id,
+            UserRecipe.deleted_at.is_(None),
         )
     )
     recipe = result.scalar_one_or_none()

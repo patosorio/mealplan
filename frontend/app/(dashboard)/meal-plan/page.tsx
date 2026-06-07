@@ -1,9 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { DayName, MealItem, MealSlot } from "@/lib/types";
 import { GenerateForm } from "@/components/meal-plan/GenerateForm";
-import { MealPlanView } from "@/components/meal-plan/MealPlanView";
+import { WeeklyPlanGrid } from "@/components/meal-plan/WeeklyPlanGrid";
 import { LoadingSkeleton } from "@/components/meal-plan/LoadingSkeleton";
 import {
   useGeneratePlan,
@@ -11,6 +11,8 @@ import {
   useRegenerateDay,
   useSaveFromPlan,
 } from "@/lib/api/meal-plans";
+import { useRecipes } from "@/lib/api/recipes";
+import { buildSavedRecipeState } from "@/lib/meal-plan-utils";
 import type { GeneratePlanRequest } from "@/lib/types";
 
 export default function MealPlanPage() {
@@ -20,15 +22,26 @@ export default function MealPlanPage() {
   const saveFromPlanMutation = useSaveFromPlan();
 
   const [savedMealIds, setSavedMealIds] = useState<Map<string, string>>(new Map());
+  const [savedJuiceKeys, setSavedJuiceKeys] = useState<Set<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
   const [saveSuccess, setSaveSuccess] = useState(false);
 
   const plan = generateMutation.data;
+  const { data: planRecipes } = useRecipes(plan?.id);
+
+  useEffect(() => {
+    if (!plan?.id || !planRecipes) return;
+    const { savedMealIds, savedJuiceKeys } = buildSavedRecipeState(plan.id, planRecipes);
+    setSavedMealIds(savedMealIds);
+    setSavedJuiceKeys(savedJuiceKeys);
+  }, [plan?.id, planRecipes]);
 
   async function handleGenerate(request: GeneratePlanRequest) {
     setError(null);
     try {
       await generateMutation.mutateAsync(request);
+      setSavedMealIds(new Map());
+      setSavedJuiceKeys(new Set());
     } catch (err) {
       setError(err instanceof Error ? err.message : "Generation failed. Please try again.");
     }
@@ -54,7 +67,7 @@ export default function MealPlanPage() {
     }
   }
 
-  async function handleBookmark(_meal: MealItem, day: DayName, slot: MealSlot) {
+  async function handleBookmark(meal: MealItem, day: DayName, slot: MealSlot) {
     if (!plan) return;
     const key = `${plan.id}-${day}-${slot}`;
     const saved = await saveFromPlanMutation.mutateAsync({
@@ -63,92 +76,110 @@ export default function MealPlanPage() {
       meal_type: slot,
     });
     setSavedMealIds((prev) => new Map([...prev, [key, saved.id]]));
+    return saved as unknown as void;
   }
 
-  // Use the regenerated plan data if available
+  async function handleBookmarkJuice(day: DayName, juiceIndex: number) {
+    if (!plan) return;
+    await saveFromPlanMutation.mutateAsync({
+      meal_plan_id: plan.id,
+      day,
+      meal_type: "juice",
+      juice_index: juiceIndex,
+    });
+    setSavedJuiceKeys((prev) => new Set([...prev, `${plan.id}-${day}-juice_${juiceIndex}`]));
+  }
+
   const activePlan = regenerateDayMutation.data ?? generateMutation.data;
 
   return (
-    <div className="space-y-8">
-      {/* Hero */}
-      <div>
-        <p className="font-mono text-[11px] uppercase tracking-[0.2em] mb-3" style={{ color: "var(--sage)" }}>
-          Weekly Meal Plan
-        </p>
-        <h1
-          className="font-display font-light leading-tight"
-          style={{ fontSize: "clamp(2rem,4vw,3rem)", color: "var(--deep-green)" }}
-        >
-          What shall we <em className="italic" style={{ color: "var(--terracotta)" }}>cook</em> this week?
-        </h1>
+    <div className="h-full flex flex-col gap-3 overflow-hidden">
+      {/* Compact header row */}
+      <div className="no-print flex items-center justify-between gap-4 flex-shrink-0">
+        <div className="flex items-baseline gap-3">
+          <h1
+            className="font-display font-light"
+            style={{ fontSize: "clamp(1.4rem,2.5vw,1.9rem)", color: "var(--deep-green)" }}
+          >
+            What shall we <em className="italic" style={{ color: "var(--terracotta)" }}>cook</em> this week?
+          </h1>
+          <span className="font-mono text-[10px] uppercase tracking-[0.2em] hidden sm:inline" style={{ color: "var(--sage)" }}>
+            Weekly Plan
+          </span>
+        </div>
       </div>
 
-      {/* Error */}
+      {/* Error / success toasts */}
       {error && (
         <div
-          className="px-5 py-3 rounded-lg font-mono text-[11px] tracking-wide"
+          className="no-print flex-shrink-0 px-4 py-2.5 rounded-lg font-mono text-[11px] tracking-wide"
           style={{ background: "rgba(196,122,74,0.1)", color: "var(--terracotta)", border: "1px solid rgba(196,122,74,0.3)" }}
         >
           {error}
         </div>
       )}
-
-      {/* Save success toast */}
       {saveSuccess && (
         <div
-          className="px-5 py-3 rounded-lg font-mono text-[11px] tracking-wide flex items-center gap-2"
+          className="no-print flex-shrink-0 px-4 py-2.5 rounded-lg font-mono text-[11px] tracking-wide flex items-center gap-2"
           style={{ background: "rgba(122,158,126,0.12)", color: "var(--deep-green)", border: "1px solid rgba(122,158,126,0.3)" }}
         >
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5}>
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5}>
             <polyline points="20 6 9 17 4 12" />
           </svg>
-          Plan saved — find it in{" "}
+          Plan saved —{" "}
           <a href="/history" className="underline underline-offset-2" style={{ color: "var(--sage)" }}>
-            History
+            view in History
           </a>
         </div>
       )}
 
-      {/* Content layout */}
-      <div className="grid gap-8 lg:grid-cols-[280px_1fr]">
-        {/* Generate form sidebar */}
+      {/* Two-column layout — fills remaining height */}
+      <div className="flex gap-5 flex-1 min-h-0">
+        {/* Sidebar — scrolls internally */}
         <div
-          className="p-6 rounded-[14px] h-fit"
+          className="no-print w-[232px] flex-shrink-0 overflow-y-auto rounded-[14px] p-5"
           style={{ background: "white", border: "1px solid rgba(122,158,126,0.15)" }}
         >
-          <p className="font-mono text-[10px] uppercase tracking-[0.2em] mb-5" style={{ color: "var(--sage)" }}>
+          <p className="font-mono text-[10px] uppercase tracking-[0.2em] mb-4" style={{ color: "var(--sage)" }}>
             Generate Plan
           </p>
-          <GenerateForm
-            onSubmit={handleGenerate}
-            isLoading={generateMutation.isPending}
-          />
+          <GenerateForm onSubmit={handleGenerate} isLoading={generateMutation.isPending} />
         </div>
 
-        {/* Plan display */}
-        <div>
+        {/* Main content — scrolls internally */}
+        <div className="flex-1 min-w-0 overflow-y-auto">
           {generateMutation.isPending && <LoadingSkeleton />}
 
           {!generateMutation.isPending && activePlan && (
-            <MealPlanView
-              plan={activePlan}
-              onBookmark={handleBookmark}
-              onRegenerate={handleRegenerate}
-              onSavePlan={handleSavePlan}
-              isRegenerating={regenerateDayMutation.isPending}
-              isSaving={savePlanMutation.isPending}
-              savedMealIds={savedMealIds}
-            />
+            <div
+              className="p-5 rounded-[14px] print:p-0 print:border-0 print:bg-transparent"
+              style={{ background: "white", border: "1px solid rgba(122,158,126,0.15)" }}
+            >
+              <WeeklyPlanGrid
+                plan={activePlan}
+                onBookmark={handleBookmark}
+                onBookmarkJuice={handleBookmarkJuice}
+                onRegenerate={handleRegenerate}
+                onSavePlan={handleSavePlan}
+                isRegenerating={regenerateDayMutation.isPending}
+                isSaving={savePlanMutation.isPending}
+                savedMealIds={savedMealIds}
+                savedJuiceKeys={savedJuiceKeys}
+              />
+            </div>
           )}
 
           {!generateMutation.isPending && !activePlan && (
             <div
-              className="flex flex-col items-center justify-center h-64 rounded-[14px] gap-3"
-              style={{ border: "1px dashed rgba(122,158,126,0.3)" }}
+              className="flex flex-col items-center justify-center rounded-[14px] h-full gap-3"
+              style={{ border: "1px dashed rgba(122,158,126,0.2)", minHeight: "200px" }}
             >
-              <span className="text-2xl" style={{ color: "var(--raw-accent)" }}>✦</span>
-              <p className="font-display italic text-center" style={{ color: "var(--text-muted)", fontSize: "1rem" }}>
-                Fill in the form and generate your personalised plan.
+              <span style={{ color: "var(--raw-accent)", opacity: 0.4, fontSize: "1.5rem" }}>✦</span>
+              <p
+                className="font-display italic text-center max-w-xs"
+                style={{ color: "var(--text-muted)", fontSize: "0.9rem" }}
+              >
+                Configure your plan in the sidebar, then generate.
               </p>
             </div>
           )}

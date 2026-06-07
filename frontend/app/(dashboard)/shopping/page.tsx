@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useState } from "react";
 import {
   useGenerateShoppingList,
@@ -8,12 +9,14 @@ import {
   useDeleteShoppingList,
 } from "@/lib/api/shopping";
 import { useMealPlanHistory } from "@/lib/api/meal-plans";
+import { usePantry } from "@/lib/api/pantry";
 
 export default function ShoppingPage() {
   const [activeListId, setActiveListId] = useState<string | null>(null);
   const [selectedPlanId, setSelectedPlanId] = useState<string>("");
 
   const { data: plans } = useMealPlanHistory();
+  const { data: pantryItems } = usePantry();
   const generateMutation = useGenerateShoppingList();
   const { data: list } = useShoppingList(activeListId);
   const toggleMutation = useToggleShoppingItem();
@@ -33,6 +36,7 @@ export default function ShoppingPage() {
 
   const checkedCount = list?.items.filter((i) => i.checked).length ?? 0;
   const totalCount = list?.items.length ?? 0;
+  const pantryEmpty = (pantryItems?.length ?? 0) === 0;
 
   return (
     <div className="max-w-xl space-y-8">
@@ -126,9 +130,22 @@ export default function ShoppingPage() {
           </div>
 
           {list.items.length === 0 ? (
-            <p className="font-display italic text-center py-6" style={{ color: "var(--text-muted)" }}>
-              Nothing to buy — your pantry has everything!
-            </p>
+            <div className="text-center py-6 space-y-3">
+              <p className="font-display italic" style={{ color: "var(--text-muted)" }}>
+                {pantryEmpty
+                  ? "No ingredients found in this plan yet — generate a new plan or bookmark meals first."
+                  : "Nothing to buy — your pantry has everything!"}
+              </p>
+              {pantryEmpty && (
+                <Link
+                  href="/pantry"
+                  className="inline-flex font-mono text-[10px] uppercase tracking-[0.12em] px-4 py-2 rounded-lg transition-opacity hover:opacity-80"
+                  style={{ border: "1px solid rgba(122,158,126,0.3)", color: "var(--deep-green)" }}
+                >
+                  Set up your pantry →
+                </Link>
+              )}
+            </div>
           ) : (
             <ul className="space-y-1.5">
               {list.items.map((item, idx) => (

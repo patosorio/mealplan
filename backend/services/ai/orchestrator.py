@@ -18,7 +18,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from models import PantryItem, UserPreferences, UserRecipe, UserTasteProfile
-from schemas.meal_plan import MealPlanResponse
+from schemas.meal_plan import JuicingConfig, MealPlanResponse
 from services.ai import claude_generator
 
 logger = logging.getLogger(__name__)
@@ -36,6 +36,8 @@ async def run_pipeline(
     preferences_text: str | None,
     week_start: date,
     plan_id: uuid.UUID,
+    extras: list[str] | None = None,
+    juicing_config: JuicingConfig | None = None,
 ) -> MealPlanResponse:
     """
     Full meal plan generation pipeline.
@@ -90,12 +92,14 @@ async def run_pipeline(
                 week_start=week_start,
                 plan_id=plan_id,
                 recent_meal_names=recent_meals,
+                extras=extras or [],
+                juicing_config=juicing_config,
             ),
-            timeout=50.0,
+            timeout=130.0,
         )
     except asyncio.TimeoutError:
         logger.error(
-            "Pipeline timeout for user %s plan_id %s — exceeded 50s", user_id, plan_id
+            "Pipeline timeout for user %s plan_id %s — exceeded 130s", user_id, plan_id
         )
         from fastapi import HTTPException
         raise HTTPException(

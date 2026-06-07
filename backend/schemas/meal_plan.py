@@ -11,26 +11,63 @@ class MealItem(BaseModel):
     """A single meal within a generated day plan."""
 
     name: str
-    type: Literal["raw", "cooked"]
+    type: Literal["raw", "cooked", "juice"]
     description: str
     tags: list[str]
     prep_minutes: int
     source: Literal["generated", "user_recipe", "corpus"] = "generated"
+    ingredients: list[str] = []
 
+
+# ── Phase 8 models ─────────────────────────────────────────────────────────────
+
+ExtraSlot = Literal["morning_juice", "morning_snack", "afternoon_snack", "evening_tea"]
+
+
+class ExtraItem(BaseModel):
+    """Structured snack / add-on slot. Generated only when user opts in."""
+
+    slot: ExtraSlot
+    name: str
+    type: Literal["raw", "cooked", "juice"]
+    description: str
+    prep_minutes: int
+    ingredients: list[str] = []
+
+
+class JuiceEntry(BaseModel):
+    """One juice in a user-built juicing schedule."""
+
+    label: str    # "Morning", "Pre-lunch", "Afternoon", "Evening" or free text
+    size_oz: int  # 8 | 16 | 24 | 32
+    size_label: str  # "8oz / 250ml", "16oz / 500ml", "24oz / 750ml", "32oz / 1L"
+
+
+class JuicingConfig(BaseModel):
+    juices: list[JuiceEntry]
+    solid_meals: list[Literal["breakfast", "lunch", "dinner"]] = []
+
+
+# ── Day plan schemas ──────────────────────────────────────────────────────────
 
 class DayMeals(BaseModel):
     breakfast: Optional[MealItem] = None
     lunch: Optional[MealItem] = None
     dinner: Optional[MealItem] = None
+    juices: list[MealItem] = []
+    extras: list[ExtraItem] = []
     snacks: list[str] = []
 
 
-# Alias used for Claude output validation — all meals required
+# Alias used for Claude output validation
+# breakfast/lunch/dinner are Optional to support juicing mode (may be None)
 class DayPlan(BaseModel):
-    breakfast: MealItem
-    lunch: MealItem
-    dinner: MealItem
-    snacks: list[str] = []
+    breakfast: Optional[MealItem] = None
+    lunch: Optional[MealItem] = None
+    dinner: Optional[MealItem] = None
+    juices: list[MealItem] = []     # Phase 8 — juicing mode
+    extras: list[ExtraItem] = []    # Phase 8 — structured add-ons
+    snacks: list[str] = []          # kept for backward compatibility
 
 
 class NutritionAvg(BaseModel):
@@ -39,6 +76,18 @@ class NutritionAvg(BaseModel):
     carbs_g: int
     fat_g: int
     fiber_g: int
+
+
+class NutritionByDay(BaseModel):
+    """Optional per-day nutrition estimates (keys: monday–sunday)."""
+
+    monday: NutritionAvg | None = None
+    tuesday: NutritionAvg | None = None
+    wednesday: NutritionAvg | None = None
+    thursday: NutritionAvg | None = None
+    friday: NutritionAvg | None = None
+    saturday: NutritionAvg | None = None
+    sunday: NutritionAvg | None = None
 
 
 # ── Claude output schema ───────────────────────────────────────────────────────
@@ -57,6 +106,7 @@ class MealPlanResponse(BaseModel):
     plan_id: uuid.UUID
     week_start: date
     nutrition_avg: NutritionAvg
+    nutrition_by_day: dict[str, NutritionAvg] = {}
     days: dict[str, DayPlan]
 
     @field_validator("days")
@@ -77,7 +127,44 @@ class GeneratePlanRequest(BaseModel):
     exclude_ingredients: list[str] = []
     preferences_text: Optional[str] = None
     week_start: date
+    # Phase 8 — optional, backward-compatible
+    extras: list[ExtraSlot] = []
+    juicing_config: Optional[JuicingConfig] = None
 
+
+# ── Phase 7 request schemas ────────────────────────────────────────────────────
+
+class PatchMealPlanRequest(BaseModel):
+    """Update name, status, or scheduled_week on an existing plan."""
+
+    name: Optional[str] = None
+    status: Optional[Literal["draft", "reviewing", "approved"]] = None
+    scheduled_week: Optional[date] = None
+
+
+class ApprovePlanRequest(BaseModel):
+    """Name the plan at approval time."""
+
+    name: str
+    accept_all: bool = False
+
+
+class SchedulePlanRequest(BaseModel):
+    """Assign plan to a calendar week (Monday date)."""
+
+    scheduled_week: date
+
+
+class PatchGeneratedMealRequest(BaseModel):
+    """Accept a meal or apply an inline manual edit."""
+
+    action: Literal["accept", "edit"]
+    # Required when action == "edit"
+    name: Optional[str] = None
+    description: Optional[str] = None
+
+
+# ── API read schemas ──────────────────────────────────────────────────────────
 
 class MealPlanRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -89,6 +176,11 @@ class MealPlanRead(BaseModel):
     plan_data: dict[str, Any]
     nutrition_avg: dict[str, Any]
     created_at: datetime
+    # Phase 7 fields
+    status: str
+    name: Optional[str] = None
+    scheduled_week: Optional[date] = None
+    approved_at: Optional[datetime] = None
 
 
 class GeneratedMealRead(BaseModel):
@@ -106,3 +198,6 @@ class GeneratedMealRead(BaseModel):
     prep_minutes: Optional[int] = None
     saved: bool
     created_at: datetime
+    # Phase 7 fields
+    approval_status: str
+    edited_manually: bool
