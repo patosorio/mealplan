@@ -23,7 +23,10 @@ export default function RecipesPage() {
   const { data: allRecipes, isLoading } = useRecipes();
   const deleteMutation = useDeleteRecipe();
 
-  // Derive unique tags sorted by frequency, excluding type tags handled in Row 1
+  // Colour tags always appear first, then remaining tags sorted by frequency.
+  // No cap — low-frequency colour tags (e.g. added to a single juice) must still show.
+  const COLOUR_TAGS = new Set(["green", "orange", "yellow", "red", "purple", "pink", "white"]);
+
   const allTags = useMemo(() => {
     const counts = new Map<string, number>();
     (allRecipes ?? []).forEach((r) => {
@@ -34,9 +37,15 @@ export default function RecipesPage() {
       });
     });
     return [...counts.entries()]
-      .sort((a, b) => b[1] - a[1])
-      .map(([tag]) => tag)
-      .slice(0, 20);
+      .sort((a, b) => {
+        const aIsColour = COLOUR_TAGS.has(a[0].toLowerCase());
+        const bIsColour = COLOUR_TAGS.has(b[0].toLowerCase());
+        if (aIsColour && !bIsColour) return -1;
+        if (!aIsColour && bIsColour) return 1;
+        return b[1] - a[1];
+      })
+      .map(([tag]) => tag);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [allRecipes]);
 
   const displayRecipes = useMemo(() => {
