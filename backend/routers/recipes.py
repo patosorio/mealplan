@@ -26,6 +26,7 @@ from services.recipe_service import (
     embed_recipe_background,
     expand_recipe_background,
     get_or_expand_recipe,
+    infer_juice_colour,
     search_recipes as svc_search,
     update_recipe,
 )
@@ -240,12 +241,17 @@ async def save_from_plan(
             raise HTTPException(status_code=404, detail="Juice not found.")
 
         juice_data = juices[body.juice_index]
+        juice_name = juice_data.get("name", "Juice")
+        juice_ingredients = juice_data.get("ingredients", [])
         juice_tags = list(juice_data.get("tags", []))
         if "juice" not in juice_tags:
             juice_tags.append("juice")
+        colour = infer_juice_colour(juice_name, juice_ingredients)
+        if colour and colour not in juice_tags:
+            juice_tags.append(colour)
         recipe = UserRecipe(
             user_id=user.id,
-            name=juice_data.get("name", "Juice"),
+            name=juice_name,
             description=juice_data.get("description"),
             ingredients=[],
             steps=[],

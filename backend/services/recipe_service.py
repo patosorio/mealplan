@@ -23,6 +23,24 @@ logger = logging.getLogger(__name__)
 _SEMANTIC_SEARCH_LIMIT = 20
 _SIMILARITY_THRESHOLD = 0.3  # cosine distance — lower is more similar
 
+_COLOUR_KEYWORDS: list[tuple[str, list[str]]] = [
+    ("green",  ["spinach", "kale", "celery", "cucumber", "wheatgrass", "matcha", "parsley", "mint"]),
+    ("orange", ["carrot", "orange", "turmeric", "mango", "papaya", "peach"]),
+    ("red",    ["beet", "beetroot", "pomegranate", "cherry", "raspberry", "strawberry", "watermelon", "red pepper"]),
+    ("yellow", ["pineapple", "lemon", "ginger", "banana", "apple", "pear", "yellow pepper"]),
+    ("purple", ["blueberry", "blackberry", "purple cabbage", "acai", "grape", "plum"]),
+    ("pink",   ["dragonfruit", "pink grapefruit", "rose", "hibiscus", "guava"]),
+]
+
+
+def infer_juice_colour(name: str, ingredients: list) -> str | None:
+    """Return a colour tag inferred from juice name and ingredients, or None."""
+    text = (name + " " + " ".join(str(i) for i in ingredients)).lower()
+    for colour, keywords in _COLOUR_KEYWORDS:
+        if any(kw in text for kw in keywords):
+            return colour
+    return None
+
 
 async def semantic_search(
     db: AsyncSession,

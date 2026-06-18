@@ -5,49 +5,48 @@ import { useMemo, useState } from "react";
 import { useRecipes, useDeleteRecipe } from "@/lib/api/recipes";
 import type { Recipe } from "@/lib/api/recipes";
 import { getRecipeType } from "@/lib/recipe-utils";
-import { DIET_OPTIONS } from "@/lib/diet-types";
+
+const TYPE_CHIPS = [
+  { value: "", label: "All" },
+  { value: "raw", label: "Raw" },
+  { value: "cooked", label: "Cooked" },
+  { value: "juice", label: "Juice" },
+] as const;
+
+// Tags that map directly to type chips — excluded from Row 2
+const TYPE_TAG_NAMES = new Set(["raw", "cooked", "juice", "raw vegan"]);
 
 export default function RecipesPage() {
   const [activeTags, setActiveTags] = useState<string[]>([]);
-  const [dietFilter, setDietFilter] = useState("");
   const [typeFilter, setTypeFilter] = useState("");
 
   const { data: allRecipes, isLoading } = useRecipes();
   const deleteMutation = useDeleteRecipe();
 
-  // Derive unique tags sorted by frequency
+  // Derive unique tags sorted by frequency, excluding type tags handled in Row 1
   const allTags = useMemo(() => {
     const counts = new Map<string, number>();
     (allRecipes ?? []).forEach((r) => {
-      r.tags.forEach((t) => counts.set(t, (counts.get(t) ?? 0) + 1));
+      r.tags.forEach((t) => {
+        if (!TYPE_TAG_NAMES.has(t.toLowerCase())) {
+          counts.set(t, (counts.get(t) ?? 0) + 1);
+        }
+      });
     });
     return [...counts.entries()]
       .sort((a, b) => b[1] - a[1])
       .map(([tag]) => tag)
-      .slice(0, 24);
+      .slice(0, 20);
   }, [allRecipes]);
 
-  // Client-side filtering: diet type, recipe type, tags — AND between types, OR within tags
   const displayRecipes = useMemo(() => {
-    const list = allRecipes ?? [];
-
-    return list.filter((r) => {
-      const matchesDiet =
-        !dietFilter ||
-        r.diet_type === dietFilter ||
-        r.diet_type === null;
-
-      const recipeType = getRecipeType(r);
-      const matchesType =
-        !typeFilter || recipeType === typeFilter.toLowerCase();
-
+    return (allRecipes ?? []).filter((r) => {
+      const matchesType = !typeFilter || getRecipeType(r) === typeFilter;
       const matchesTags =
-        activeTags.length === 0 ||
-        activeTags.some((tag) => r.tags?.includes(tag));
-
-      return matchesDiet && matchesType && matchesTags;
+        activeTags.length === 0 || activeTags.some((tag) => r.tags?.includes(tag));
+      return matchesType && matchesTags;
     });
-  }, [allRecipes, dietFilter, typeFilter, activeTags]);
+  }, [allRecipes, typeFilter, activeTags]);
 
   function toggleTag(tag: string) {
     setActiveTags((prev) =>
@@ -57,11 +56,10 @@ export default function RecipesPage() {
 
   function clearAllFilters() {
     setActiveTags([]);
-    setDietFilter("");
     setTypeFilter("");
   }
 
-  const hasActiveFilters = activeTags.length > 0 || !!dietFilter || !!typeFilter;
+  const hasActiveFilters = activeTags.length > 0 || !!typeFilter;
 
   return (
     <div className="space-y-7">
@@ -108,86 +106,68 @@ export default function RecipesPage() {
 
       {/* ── Filter bar ───────────────────────────────────────────────────── */}
       {(allRecipes ?? []).length > 0 && (
-        <div className="space-y-3">
-          {/* Dropdown filters row */}
-          <div className="flex flex-col sm:flex-row gap-2 sm:flex-wrap">
-            <div className="flex items-center gap-1.5 w-full sm:w-auto">
-              <span className="font-mono text-[10px] uppercase tracking-[0.13em] shrink-0" style={{ color: "var(--text-muted)" }}>Diet</span>
-              <select
-                value={dietFilter}
-                onChange={(e) => setDietFilter(e.target.value)}
-                className="flex-1 sm:flex-none px-3 py-2 rounded-lg font-mono text-[10px] uppercase tracking-[0.1em] outline-none"
-                style={{ background: "white", border: "1px solid rgba(122,158,126,0.3)", color: dietFilter ? "var(--deep-green)" : "var(--sage)" }}
-              >
-                <option value="">All</option>
-                {DIET_OPTIONS.map((o) => (
-                  <option key={o.value} value={o.value}>{o.label}</option>
-                ))}
-              </select>
-            </div>
-
-            <div className="flex items-center gap-1.5 w-full sm:w-auto">
-              <span className="font-mono text-[10px] uppercase tracking-[0.13em] shrink-0" style={{ color: "var(--text-muted)" }}>Prep</span>
-              <select
-                value={typeFilter}
-                onChange={(e) => setTypeFilter(e.target.value)}
-                className="flex-1 sm:flex-none px-3 py-2 rounded-lg font-mono text-[10px] uppercase tracking-[0.1em] outline-none"
-                style={{ background: "white", border: "1px solid rgba(122,158,126,0.3)", color: typeFilter ? "var(--deep-green)" : "var(--sage)" }}
-              >
-                <option value="">All</option>
-                <option value="raw">Raw</option>
-                <option value="cooked">Cooked</option>
-                <option value="juice">Juice</option>
-              </select>
-            </div>
-
+        <div className="space-y-2.5">
+          {/* Row 1 — Type chips (mutually exclusive) */}
+          <div className="flex items-center gap-1.5 flex-wrap">
+            {TYPE_CHIPS.map(({ value, label }) => {
+              const active = typeFilter === value;
+              return (
+                <button
+                  key={value}
+                  type="button"
+                  onClick={() => setTypeFilter(value)}
+                  className="font-mono text-[10px] uppercase tracking-[0.12em] px-3 py-1.5 rounded-full transition-colors"
+                  style={{
+                    background: active ? "var(--deep-green)" : "transparent",
+                    color: active ? "var(--cream)" : "var(--sage)",
+                    border: `1px solid ${active ? "var(--deep-green)" : "rgba(122,158,126,0.4)"}`,
+                  }}
+                >
+                  {label}
+                </button>
+              );
+            })}
             {hasActiveFilters && (
               <button
                 type="button"
                 onClick={clearAllFilters}
-                className="font-mono text-[10px] uppercase tracking-[0.12em] px-3 py-2 rounded-lg transition-opacity hover:opacity-70"
-                style={{ color: "var(--terracotta)", border: "1px solid rgba(196,122,74,0.25)" }}
+                className="font-mono text-[9px] uppercase tracking-[0.12em] ml-1 transition-opacity hover:opacity-70"
+                style={{ color: "var(--terracotta)" }}
               >
-                Clear filters
+                Clear
               </button>
             )}
           </div>
 
-          {/* Tag multi-select */}
+          {/* Row 2 — Tag chips (multi-select, OR logic) */}
           {allTags.length > 0 && (
-            <div className="flex items-start gap-2 flex-wrap">
-              <span className="font-mono text-[10px] uppercase tracking-[0.15em] mt-1.5 mr-1 shrink-0" style={{ color: "var(--text-muted)" }}>
-                Tags
-              </span>
-              <div className="flex flex-wrap gap-1.5">
-                {allTags.map((tag) => {
-                  const active = activeTags.includes(tag);
-                  return (
-                    <button
-                      key={tag}
-                      type="button"
-                      onClick={() => toggleTag(tag)}
-                      className="font-mono text-[9px] uppercase tracking-[0.1em] px-2.5 py-1 rounded-full transition-colors"
-                      style={{
-                        background: active ? "rgba(122,158,126,0.25)" : "rgba(247,243,236,0.9)",
-                        color: active ? "var(--deep-green)" : "var(--sage)",
-                        border: `1px solid ${active ? "rgba(122,158,126,0.4)" : "rgba(122,158,126,0.2)"}`,
-                        fontWeight: active ? 500 : 400,
-                      }}
-                    >
-                      {tag}
-                    </button>
-                  );
-                })}
-              </div>
+            <div className="flex flex-wrap gap-1.5">
+              {allTags.map((tag) => {
+                const active = activeTags.includes(tag);
+                return (
+                  <button
+                    key={tag}
+                    type="button"
+                    onClick={() => toggleTag(tag)}
+                    className="font-mono text-[9px] uppercase tracking-[0.1em] px-2.5 py-1 rounded-full transition-colors"
+                    style={{
+                      background: active ? "rgba(122,158,126,0.2)" : "transparent",
+                      color: active ? "var(--deep-green)" : "var(--sage)",
+                      border: `1px solid ${active ? "rgba(122,158,126,0.5)" : "rgba(122,158,126,0.25)"}`,
+                      fontWeight: active ? 500 : 400,
+                    }}
+                  >
+                    {tag}
+                  </button>
+                );
+              })}
             </div>
           )}
 
           {/* Result count */}
           {hasActiveFilters && (
-            <p className="font-mono text-[10px] uppercase tracking-wide" style={{ color: "var(--text-muted)" }}>
+            <p className="font-mono text-[9px] uppercase tracking-wide" style={{ color: "var(--text-muted)" }}>
               {displayRecipes.length} result{displayRecipes.length !== 1 ? "s" : ""}
-              {activeTags.length > 0 && ` · ${activeTags.length} tag${activeTags.length > 1 ? "s" : ""}`}
             </p>
           )}
         </div>
