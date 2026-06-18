@@ -18,7 +18,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from models import PantryItem, UserPreferences, UserRecipe, UserTasteProfile
-from schemas.meal_plan import JuicingConfig, MealPlanResponse
+from schemas.meal_plan import DayPlan, JuicingConfig, MealPlanResponse, RecipeUsagePolicy
 from services.ai import claude_generator
 
 logger = logging.getLogger(__name__)
@@ -38,6 +38,9 @@ async def run_pipeline(
     plan_id: uuid.UUID,
     extras: list[str] | None = None,
     juicing_config: JuicingConfig | None = None,
+    plan_days: int = 7,
+    raw_cooked_ratio: str = "80_20",
+    recipe_usage_policy: RecipeUsagePolicy | None = None,
 ) -> MealPlanResponse:
     """
     Full meal plan generation pipeline.
@@ -94,12 +97,15 @@ async def run_pipeline(
                 recent_meal_names=recent_meals,
                 extras=extras or [],
                 juicing_config=juicing_config,
+                plan_days=plan_days,
+                raw_cooked_ratio=raw_cooked_ratio,
+                recipe_usage_policy=recipe_usage_policy,
             ),
-            timeout=130.0,
+            timeout=370.0,  # 2 × 175s attempts + 20s slack
         )
     except asyncio.TimeoutError:
         logger.error(
-            "Pipeline timeout for user %s plan_id %s — exceeded 130s", user_id, plan_id
+            "Pipeline timeout for user %s plan_id %s — exceeded 370s", user_id, plan_id
         )
         from fastapi import HTTPException
         raise HTTPException(
@@ -107,6 +113,54 @@ async def run_pipeline(
             detail="Meal plan generation timed out. Please try again.",
         )
     return plan
+
+
+async def run_single_day_pipeline(
+    db: AsyncSession,
+    user_id: uuid.UUID,
+    diet_type: str,
+    calories_target: int,
+    meals_per_day: list[str],
+    exclude_ingredients: list[str],
+    preferences_text: str | None,
+    day: str,
+) -> DayPlan:
+    """Generate a single day using Claude Haiku and loaded user context."""
+    (
+        user_recipes,
+        taste_profile,
+        pantry_items,
+        prefs,
+    ) = await asyncio.gather(
+        _load_user_recipes(db, user_id),
+        _load_taste_profile(db, user_id),
+        _load_pantry_items(db, user_id),
+        _load_preferences(db, user_id),
+    )
+
+    if prefs is not None:
+        if not exclude_ingredients and prefs.excluded_ingredients:
+            exclude_ingredients = list(prefs.excluded_ingredients)
+        if not preferences_text and prefs.preferences_text:
+            preferences_text = prefs.preferences_text
+
+    recent_meals: list[str] = taste_profile.get("recent_meal_names") or []
+    profile_dict: dict[str, Any] = {
+        k: v for k, v in taste_profile.items() if k != "recent_meal_names"
+    }
+
+    return await claude_generator.generate_single_day(
+        user_recipes=user_recipes,
+        diet_type=diet_type,
+        calories_target=calories_target,
+        meals_per_day=meals_per_day,
+        exclude_ingredients=exclude_ingredients,
+        preferences_text=preferences_text,
+        taste_profile=profile_dict,
+        pantry_items=pantry_items,
+        recent_meal_names=recent_meals,
+        day=day,
+    )
 
 
 async def run_day_pipeline(
@@ -120,11 +174,9 @@ async def run_day_pipeline(
     plan_id: uuid.UUID,
     day: str,
 ) -> MealPlanResponse:
-    """
-    Re-run the pipeline for a single day (regenerate-day flow).
-    Returns a full MealPlanResponse; the caller extracts just the target day.
-    """
-    return await run_pipeline(
+    """Deprecated — use run_single_day_pipeline for single-day regeneration."""
+    del week_start, plan_id
+    day_plan = await run_single_day_pipeline(
         db=db,
         user_id=user_id,
         diet_type=diet_type,
@@ -132,8 +184,20 @@ async def run_day_pipeline(
         meals_per_day=["breakfast", "lunch", "dinner"],
         exclude_ingredients=exclude_ingredients,
         preferences_text=preferences_text,
-        week_start=week_start,
-        plan_id=plan_id,
+        day=day,
+    )
+    return MealPlanResponse(
+        plan_id=uuid.uuid4(),
+        week_start=date.today(),
+        plan_days=1,
+        nutrition_avg={
+            "calories": calories_target,
+            "protein_g": 60,
+            "carbs_g": 200,
+            "fat_g": 70,
+            "fiber_g": 35,
+        },
+        days={day: day_plan},
     )
 
 
@@ -157,8 +221,17 @@ async def _load_user_recipes(
 
 def _serialise_recipe(recipe: UserRecipe) -> dict[str, Any]:
     tags: list[str] = recipe.tags or []
-    # Infer type from tags; default to "cooked"
-    meal_type = "raw" if "raw" in tags else "cooked"
+    # Use the stored type directly; fall back to tag inference for legacy rows
+    if recipe.type:
+        meal_type = recipe.type
+    else:
+        lower_tags = {t.lower() for t in tags}
+        if "juice" in lower_tags or "smoothie" in lower_tags:
+            meal_type = "juice"
+        elif "raw" in lower_tags or "raw vegan" in lower_tags:
+            meal_type = "raw"
+        else:
+            meal_type = "cooked"
     return {
         "name": recipe.name,
         "description": recipe.description or "",

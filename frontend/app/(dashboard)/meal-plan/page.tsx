@@ -4,7 +4,8 @@ import { useEffect, useState } from "react";
 import type { DayName, MealItem, MealSlot } from "@/lib/types";
 import { GenerateForm } from "@/components/meal-plan/GenerateForm";
 import { WeeklyPlanGrid } from "@/components/meal-plan/WeeklyPlanGrid";
-import { LoadingSkeleton } from "@/components/meal-plan/LoadingSkeleton";
+import { GenerationProgress } from "@/components/meal-plan/GenerationProgress";
+import { activeDaysFromPlan } from "@/lib/meal-plan-utils";
 import {
   useGeneratePlan,
   useSavePlan,
@@ -25,6 +26,8 @@ export default function MealPlanPage() {
   const [savedJuiceKeys, setSavedJuiceKeys] = useState<Set<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
   const [saveSuccess, setSaveSuccess] = useState(false);
+  const [revealedDays, setRevealedDays] = useState(0);
+  const [pendingPlanDays, setPendingPlanDays] = useState(7);
 
   const plan = generateMutation.data;
   const { data: planRecipes } = useRecipes(plan?.id);
@@ -38,6 +41,8 @@ export default function MealPlanPage() {
 
   async function handleGenerate(request: GeneratePlanRequest) {
     setError(null);
+    setRevealedDays(0);
+    setPendingPlanDays(request.plan_days ?? 7);
     try {
       await generateMutation.mutateAsync(request);
       setSavedMealIds(new Map());
@@ -46,6 +51,25 @@ export default function MealPlanPage() {
       setError(err instanceof Error ? err.message : "Generation failed. Please try again.");
     }
   }
+
+  const activePlan = regenerateDayMutation.data ?? generateMutation.data;
+
+  useEffect(() => {
+    if (!activePlan) {
+      setRevealedDays(0);
+      return;
+    }
+    const count = activeDaysFromPlan(activePlan).length;
+    // Start at 1 so the first column is visible on the very first render
+    setRevealedDays(1);
+    let current = 1;
+    const timer = window.setInterval(() => {
+      current += 1;
+      setRevealedDays(current);
+      if (current >= count) window.clearInterval(timer);
+    }, 300);
+    return () => window.clearInterval(timer);
+  }, [activePlan?.id]);
 
   async function handleSavePlan() {
     if (!plan) return;
@@ -90,20 +114,18 @@ export default function MealPlanPage() {
     setSavedJuiceKeys((prev) => new Set([...prev, `${plan.id}-${day}-juice_${juiceIndex}`]));
   }
 
-  const activePlan = regenerateDayMutation.data ?? generateMutation.data;
-
   return (
-    <div className="h-full flex flex-col gap-3 overflow-hidden">
+    <div className="flex flex-col gap-3 md:h-full md:overflow-hidden">
       {/* Compact header row */}
-      <div className="no-print flex items-center justify-between gap-4 flex-shrink-0">
-        <div className="flex items-baseline gap-3">
+      <div className="no-print flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 flex-shrink-0">
+        <div className="flex flex-col sm:flex-row sm:items-baseline gap-1 sm:gap-3 min-w-0">
           <h1
-            className="font-display font-light"
+            className="font-display font-light leading-tight"
             style={{ fontSize: "clamp(1.4rem,2.5vw,1.9rem)", color: "var(--deep-green)" }}
           >
             What shall we <em className="italic" style={{ color: "var(--terracotta)" }}>cook</em> this week?
           </h1>
-          <span className="font-mono text-[10px] uppercase tracking-[0.2em] hidden sm:inline" style={{ color: "var(--sage)" }}>
+          <span className="font-mono text-[10px] uppercase tracking-[0.2em]" style={{ color: "var(--sage)" }}>
             Weekly Plan
           </span>
         </div>
@@ -133,11 +155,11 @@ export default function MealPlanPage() {
         </div>
       )}
 
-      {/* Two-column layout — fills remaining height */}
-      <div className="flex gap-5 flex-1 min-h-0">
+      {/* Two-column layout — stacks on mobile */}
+      <div className="flex flex-col md:flex-row gap-5 flex-1 min-h-0">
         {/* Sidebar — scrolls internally */}
         <div
-          className="no-print w-[232px] flex-shrink-0 overflow-y-auto rounded-[14px] p-5"
+          className="no-print w-full md:w-[232px] flex-shrink-0 overflow-y-auto rounded-[14px] p-5"
           style={{ background: "white", border: "1px solid rgba(122,158,126,0.15)" }}
         >
           <p className="font-mono text-[10px] uppercase tracking-[0.2em] mb-4" style={{ color: "var(--sage)" }}>
@@ -148,11 +170,13 @@ export default function MealPlanPage() {
 
         {/* Main content — scrolls internally */}
         <div className="flex-1 min-w-0 overflow-y-auto">
-          {generateMutation.isPending && <LoadingSkeleton />}
+          {generateMutation.isPending && (
+            <GenerationProgress planDays={pendingPlanDays} />
+          )}
 
           {!generateMutation.isPending && activePlan && (
             <div
-              className="p-5 rounded-[14px] print:p-0 print:border-0 print:bg-transparent"
+              className="p-4 sm:p-5 rounded-[14px] print:p-0 print:border-0 print:bg-transparent overflow-x-auto"
               style={{ background: "white", border: "1px solid rgba(122,158,126,0.15)" }}
             >
               <WeeklyPlanGrid
@@ -165,6 +189,7 @@ export default function MealPlanPage() {
                 isSaving={savePlanMutation.isPending}
                 savedMealIds={savedMealIds}
                 savedJuiceKeys={savedJuiceKeys}
+                revealedDayCount={revealedDays}
               />
             </div>
           )}

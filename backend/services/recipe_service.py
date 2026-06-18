@@ -13,6 +13,7 @@ from pgvector.sqlalchemy import Vector
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from db.background import run_with_session
 from models import UserRecipe
 from services.ai.gemini_embedder import embed_query
 from services.ai.recipe_expander import expand_recipe
@@ -147,6 +148,14 @@ async def get_or_expand_recipe(
 
 
 async def expand_recipe_background(
+    recipe_id: uuid.UUID,
+    user_id: uuid.UUID,
+) -> None:
+    """Background task wrapper — uses a fresh session."""
+    await run_with_session(_expand_recipe_background, recipe_id, user_id)
+
+
+async def _expand_recipe_background(
     db: AsyncSession,
     recipe_id: uuid.UUID,
     user_id: uuid.UUID,
@@ -181,3 +190,48 @@ async def expand_recipe_background(
         logger.exception(
             "Background expansion failed for recipe_id=%s", recipe_id
         )
+
+
+async def embed_recipe_background(
+    recipe_id: uuid.UUID,
+    name: str,
+    description: str | None,
+) -> None:
+    await run_with_session(_embed_recipe_background, recipe_id, name, description)
+
+
+async def _embed_recipe_background(
+    db: AsyncSession,
+    recipe_id: uuid.UUID,
+    name: str,
+    description: str | None,
+) -> None:
+    from services.ai.gemini_embedder import embed_text
+
+    try:
+        text = f"{name}. {description or ''}".strip()
+        embedding = await embed_text(text)
+        result = await db.execute(
+            select(UserRecipe).where(UserRecipe.id == recipe_id)
+        )
+        recipe = result.scalar_one_or_none()
+        if recipe is None:
+            return
+        recipe.embedding = embedding
+        await db.commit()
+    except Exception:
+        logger.exception("Embedding failed for recipe %s", recipe_id)
+
+
+async def update_recipe(
+    db: AsyncSession,
+    recipe: UserRecipe,
+    updates: dict[str, object],
+) -> UserRecipe:
+    """Apply partial updates to a user recipe."""
+    for field, value in updates.items():
+        if value is not None:
+            setattr(recipe, field, value)
+    await db.commit()
+    await db.refresh(recipe)
+    return recipe

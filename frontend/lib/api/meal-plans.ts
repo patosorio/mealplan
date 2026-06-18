@@ -99,6 +99,7 @@ export function useRegenerateDay() {
       }),
     onSuccess: (data) => {
       qc.invalidateQueries({ queryKey: mealPlanKeys.detail(data.id) });
+      qc.invalidateQueries({ queryKey: mealPlanKeys.meals(data.id) });
     },
   });
 }
@@ -233,6 +234,7 @@ export function usePatchGeneratedMeal() {
       }),
     onSuccess: (_data, variables) => {
       qc.invalidateQueries({ queryKey: mealPlanKeys.meals(variables.planId) });
+      qc.invalidateQueries({ queryKey: mealPlanKeys.detail(variables.planId) });
     },
   });
 }
@@ -246,6 +248,7 @@ export function useSwapMeal() {
       }),
     onSuccess: (_data, variables) => {
       qc.invalidateQueries({ queryKey: mealPlanKeys.meals(variables.planId) });
+      qc.invalidateQueries({ queryKey: mealPlanKeys.detail(variables.planId) });
     },
   });
 }

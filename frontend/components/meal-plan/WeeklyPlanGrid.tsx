@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import Link from "next/link";
-import type { DayName, ExtraItem, MealItem, MealPlan, MealSlot } from "@/lib/types";
-import { DAYS } from "@/lib/types";
+import { activeDaysFromPlan, juiceSlotKey, mealSlotKey } from "@/lib/meal-plan-utils";
+import { getDayNutrition, sumWeeklyNutrition } from "@/lib/nutrition-utils";
+import type { DayName, ExtraItem, MealItem, MealPlan, MealSlot, NutritionAvg } from "@/lib/types";
 
 interface WeeklyPlanGridProps {
   plan: MealPlan;
@@ -15,6 +16,7 @@ interface WeeklyPlanGridProps {
   isSaving?: boolean;
   savedMealIds?: Map<string, string>;
   savedJuiceKeys?: Set<string>;
+  revealedDayCount?: number;
 }
 
 const DAY_SHORT: Record<DayName, string> = {
@@ -46,45 +48,39 @@ export function WeeklyPlanGrid({
   isSaving = false,
   savedMealIds,
   savedJuiceKeys,
+  revealedDayCount,
 }: WeeklyPlanGridProps) {
   const [selected, setSelected] = useState<CellKey | null>(null);
   const [bookmarkingKey, setBookmarkingKey] = useState<string | null>(null);
-  const [savedJuices, setSavedJuices] = useState<Set<string>>(new Set(savedJuiceKeys));
-  const [savedMeals, setSavedMeals] = useState<Map<string, string>>(new Map(savedMealIds));
-
-  useEffect(() => {
-    if (savedMealIds) {
-      setSavedMeals((prev) => {
-        const merged = new Map(savedMealIds);
-        prev.forEach((v, k) => {
-          if (!merged.has(k)) merged.set(k, v);
-        });
-        return merged;
-      });
-    }
-  }, [savedMealIds]);
-
-  useEffect(() => {
-    if (savedJuiceKeys) {
-      setSavedJuices((prev) => new Set([...savedJuiceKeys, ...prev]));
-    }
-  }, [savedJuiceKeys]);
 
   const days = plan.plan_data.days;
+  const activeDays = activeDaysFromPlan(plan);
+  const weeklyTotals = sumWeeklyNutrition(plan);
+  const revealCount = revealedDayCount ?? activeDays.length;
+
+  function isSlotSaved(day: DayName, slotType: "meal" | "juice" | "extra", slot: string, index?: number): boolean {
+    if (slotType === "juice" && index != null) {
+      return savedJuiceKeys?.has(juiceSlotKey(plan.id, day, index)) ?? false;
+    }
+    if (slotType === "meal") {
+      return savedMealIds?.has(mealSlotKey(plan.id, day, slot)) ?? false;
+    }
+    return false;
+  }
 
   // Determine row structure
   const solidSlots = (["breakfast", "lunch", "dinner"] as MealSlot[]).filter((slot) =>
-    DAYS.some((d) => days[d]?.[slot] != null)
+    activeDays.some((d) => days[d]?.[slot] != null)
   );
-  const maxJuices = Math.max(0, ...DAYS.map((d) => (days[d]?.juices ?? []).length));
+  const maxJuices = Math.max(0, ...activeDays.map((d) => (days[d]?.juices ?? []).length));
   const extraSlots = [
     ...new Set(
-      DAYS.flatMap((d) => (days[d]?.extras ?? []).map((e: ExtraItem) => e.slot))
+      activeDays.flatMap((d) => (days[d]?.extras ?? []).map((e: ExtraItem) => e.slot))
     ),
   ];
 
   // Chronologically-ordered rows
-  const rows = buildRows(days as Record<string, DayPlan>, solidSlots, maxJuices, extraSlots);
+  const rows = buildRows(days as Record<string, DayPlan>, activeDays, solidSlots, maxJuices, extraSlots);
 
   const weekLabel = new Date(plan.week_start + "T00:00:00").toLocaleDateString("en-GB", {
     day: "numeric",
@@ -92,8 +88,10 @@ export function WeeklyPlanGrid({
     year: "numeric",
   });
 
-  // Detail panel state
-  const selDay = selected?.day;
+  // Detail panel state — dismiss if selected day is not yet revealed
+  const selDayIdx = selected?.day ? activeDays.indexOf(selected.day) : -1;
+  const selDayRevealed = selDayIdx >= 0 && selDayIdx < revealCount;
+  const selDay = selDayRevealed ? selected?.day : null;
   const selDayPlan = selDay ? days[selDay] : null;
   let detailMeal: MealItem | null = null;
   let detailExtra: ExtraItem | null = null;
@@ -117,13 +115,8 @@ export function WeeklyPlanGrid({
     try {
       if (selected.slotType === "juice" && selected.index != null && onBookmarkJuice) {
         await onBookmarkJuice(selDay, selected.index);
-        setSavedJuices((prev) => new Set([...prev, `${plan.id}-${selDay}-juice_${selected.index}`]));
       } else if (selected.slotType === "meal" && detailMeal && onBookmark) {
-        const saved = await onBookmark(detailMeal, selDay, selected.slot as MealSlot);
-        const recipeId = (saved as unknown as { id?: string })?.id;
-        if (recipeId) {
-          setSavedMeals((prev) => new Map([...prev, [`${plan.id}-${selDay}-${selected.slot}`, recipeId]]));
-        }
+        await onBookmark(detailMeal, selDay, selected.slot as MealSlot);
       }
     } catch {
       // 409 = already saved — OK
@@ -132,19 +125,25 @@ export function WeeklyPlanGrid({
     }
   }
 
-  const isMealSaved = selected
-    ? selected.slotType === "juice"
-      ? savedJuices.has(`${plan.id}-${selDay}-juice_${selected.index}`)
-      : savedMeals.has(`${plan.id}-${selDay}-${selected.slot}`)
-    : false;
+  const isMealSaved =
+    (selected && selDay
+      ? isSlotSaved(
+          selDay,
+          selected.slotType === "juice" ? "juice" : selected.slotType === "meal" ? "meal" : "extra",
+          selected.slot,
+          selected.index
+        )
+      : false) || detailMeal?.source === "user_recipe";
   const savedRecipeId =
-    selected?.slotType === "meal" ? savedMeals.get(`${plan.id}-${selDay}-${selected.slot}`) : undefined;
+    selected?.slotType === "meal" && selDay
+      ? savedMealIds?.get(mealSlotKey(plan.id, selDay, selected.slot))
+      : undefined;
 
   return (
     <div className="space-y-4">
       {/* Interactive header — hidden when printing */}
-      <div className="no-print flex items-center justify-between gap-4 flex-wrap">
-        <div>
+      <div className="no-print flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div className="min-w-0">
           <p className="font-mono text-[10px] uppercase tracking-[0.2em]" style={{ color: "var(--sage)" }}>
             Week of {weekLabel}
           </p>
@@ -152,24 +151,29 @@ export function WeeklyPlanGrid({
             Click any meal for details
           </p>
         </div>
-        <div className="flex items-center gap-2">
-          {plan.nutrition_avg && (
-            <div className="hidden sm:flex items-center gap-2">
-              {[
-                { label: "Cal", value: plan.nutrition_avg.calories },
-                { label: "Protein", value: `${plan.nutrition_avg.protein_g}g` },
-                { label: "Fibre", value: `${plan.nutrition_avg.fiber_g}g` },
-              ].map(({ label, value }) => (
-                <span
-                  key={label}
-                  className="font-mono text-[10px] uppercase tracking-[0.1em] px-2.5 py-1 rounded-full"
-                  style={{ background: "rgba(122,158,126,0.1)", color: "var(--sage)" }}
-                >
-                  {label} {value}
-                </span>
-              ))}
+        <div className="flex flex-col gap-2 w-full sm:w-auto sm:items-end">
+          {weeklyTotals && (
+            <div className="overflow-x-auto max-w-full -mx-1 px-1">
+              <div className="flex items-center gap-2 flex-nowrap min-w-max pb-0.5">
+                {[
+                  { label: "Cal", value: weeklyTotals.calories },
+                  { label: "Protein", value: `${weeklyTotals.protein_g}g` },
+                  { label: "Carbs", value: `${weeklyTotals.carbs_g}g` },
+                  { label: "Fat", value: `${weeklyTotals.fat_g}g` },
+                  { label: "Fibre", value: `${weeklyTotals.fiber_g}g` },
+                ].map(({ label, value }) => (
+                  <span
+                    key={label}
+                    className="font-mono text-[10px] uppercase tracking-[0.1em] px-2.5 py-1 rounded-full whitespace-nowrap"
+                    style={{ background: "rgba(122,158,126,0.1)", color: "var(--sage)" }}
+                  >
+                    {label} {value}
+                  </span>
+                ))}
+              </div>
             </div>
           )}
+          <div className="flex items-center gap-2 flex-wrap">
           {onSavePlan && (
             <button
               onClick={onSavePlan}
@@ -188,62 +192,74 @@ export function WeeklyPlanGrid({
           >
             Print / PDF
           </button>
+          </div>
         </div>
       </div>
 
       {/* Grid + detail panel */}
-      <div className="flex gap-4 items-start">
+      <div className="flex flex-col xl:flex-row gap-4 items-start">
         {/* Printable weekly grid only */}
-        <div id="meal-plan-print" className="meal-plan-print flex-1 min-w-0">
+        <div id="meal-plan-print" className="meal-plan-print flex-1 min-w-0 w-full">
           <div className="meal-plan-print-header">
             <p
               className="font-display text-[1.1rem] font-light"
               style={{ color: "var(--deep-green)" }}
             >
-              Patri<em className="italic" style={{ color: "var(--terracotta)" }}>Eats</em>
+              Nouri
               {plan.name ? ` · ${plan.name}` : ""}
             </p>
             <p className="font-mono text-[10px] uppercase tracking-[0.15em] mt-1" style={{ color: "var(--sage)" }}>
               Week of {weekLabel}
-              {plan.nutrition_avg && (
+              {weeklyTotals && (
                 <span style={{ color: "var(--text-muted)" }}>
                   {" "}
-                  · {plan.nutrition_avg.calories} kcal avg · {plan.nutrition_avg.protein_g}g protein ·{" "}
-                  {plan.nutrition_avg.fiber_g}g fibre
+                  · {weeklyTotals.calories} kcal total · {weeklyTotals.protein_g}g protein ·{" "}
+                  {weeklyTotals.fiber_g}g fibre
                 </span>
               )}
             </p>
           </div>
 
-          <div className="overflow-x-auto">
-          <table className="w-full border-collapse" style={{ minWidth: "560px" }}>
+          <div className="overflow-x-auto -mx-1 px-1">
+          <table className="w-full border-collapse" style={{ minWidth: `${Math.max(560, activeDays.length * 88 + 72)}px` }}>
             <thead>
               <tr>
                 {/* Row label column */}
                 <th className="w-[72px]" />
-                {DAYS.map((day) => (
-                  <th key={day} className="pb-2 px-1">
-                    <div className="flex flex-col items-center gap-1">
-                      <span
-                        className="font-mono text-[10px] uppercase tracking-[0.18em]"
-                        style={{ color: "var(--sage)" }}
-                      >
-                        {DAY_SHORT[day]}
-                      </span>
-                      {onRegenerate && (
-                        <button
-                          onClick={() => onRegenerate(day)}
-                          disabled={isRegenerating}
-                          title="Regenerate day"
-                          className="no-print opacity-0 hover:opacity-100 group-hover:opacity-100 transition-opacity font-mono text-[9px] px-1.5 py-0.5 rounded"
-                          style={{ color: "var(--text-muted)" }}
+                {activeDays.map((day, dayIdx) => {
+                  const revealed = dayIdx < revealCount;
+                  return (
+                    <th key={day} className="pb-2 px-1">
+                      {/* Day headers are always visible — unrevealed days show a pulse dot */}
+                      <div className="flex flex-col items-center gap-1">
+                        <span
+                          className="font-mono text-[10px] uppercase tracking-[0.18em]"
+                          style={{ color: "var(--sage)" }}
                         >
-                          ↺
-                        </button>
-                      )}
-                    </div>
-                  </th>
-                ))}
+                          {DAY_SHORT[day]}
+                        </span>
+                        {revealed ? (
+                          onRegenerate && (
+                            <button
+                              onClick={() => onRegenerate(day)}
+                              disabled={isRegenerating}
+                              title="Regenerate day"
+                              className="no-print opacity-0 hover:opacity-100 transition-opacity font-mono text-[9px] px-1.5 py-0.5 rounded"
+                              style={{ color: "var(--text-muted)" }}
+                            >
+                              ↺
+                            </button>
+                          )
+                        ) : (
+                          <span
+                            className="w-1 h-1 rounded-full animate-pulse"
+                            style={{ background: "var(--sage)", opacity: 0.4 }}
+                          />
+                        )}
+                      </div>
+                    </th>
+                  );
+                })}
               </tr>
             </thead>
             <tbody>
@@ -263,7 +279,18 @@ export function WeeklyPlanGrid({
                       {rowLabel(row)}
                     </td>
 
-                    {DAYS.map((day) => {
+                    {activeDays.map((day, dayIdx) => {
+                      const revealed = dayIdx < revealCount;
+
+                      // Unrevealed columns show a skeleton placeholder — not invisible content
+                      if (!revealed) {
+                        return (
+                          <td key={day} className="p-0.5">
+                            <RevealingCell />
+                          </td>
+                        );
+                      }
+
                       // ── Snacks row ──────────────────────────────────────
                       if (row.kind === "snacks") {
                         const snacks: string[] = days[day]?.snacks ?? [];
@@ -366,6 +393,31 @@ export function WeeklyPlanGrid({
                   </tr>
                 );
               })}
+              <tr>
+                <td className="pr-2 pt-3 align-top w-[72px]">
+                  <span className="font-mono text-[8px] uppercase tracking-[0.12em]" style={{ color: "var(--sage)" }}>
+                    Daily
+                  </span>
+                </td>
+                {activeDays.map((day, dayIdx) => {
+                  const revealed = dayIdx < revealCount;
+                  const n = revealed ? getDayNutrition(plan, day) : null;
+                  return (
+                    <td key={`nutrition-${day}`} className="px-0.5 pt-2 pb-1 align-top">
+                      {!revealed ? (
+                        <div
+                          className="rounded-lg animate-pulse"
+                          style={{ height: "36px", background: "rgba(122,158,126,0.06)" }}
+                        />
+                      ) : n ? (
+                        <DayNutritionStrip nutrition={n} />
+                      ) : (
+                        <span className="text-[0.65rem]" style={{ color: "var(--text-muted)", opacity: 0.4 }}>—</span>
+                      )}
+                    </td>
+                  );
+                })}
+              </tr>
             </tbody>
           </table>
           </div>
@@ -374,7 +426,7 @@ export function WeeklyPlanGrid({
         {/* Detail panel — screen only */}
         {selected && (detailMeal || detailExtra) && (
           <div
-            className="no-print w-[220px] flex-shrink-0 p-4 rounded-[14px] space-y-3 sticky top-4"
+            className="no-print w-full xl:w-[220px] flex-shrink-0 p-4 rounded-[14px] space-y-3 xl:sticky xl:top-4"
             style={{
               background: selected.slotType === "juice"
                 ? "rgba(232,213,163,0.15)"
@@ -460,22 +512,22 @@ export function WeeklyPlanGrid({
               </p>
             )}
 
-            {/* Save to recipes */}
-            {(onBookmark || onBookmarkJuice) && selected.slotType !== "extra" && (
+            {/* Save to recipes — hidden when already saved or from user's own recipes */}
+            {!isMealSaved && (onBookmark || onBookmarkJuice) && selected.slotType !== "extra" ? (
               <button
                 onClick={handleBookmark}
-                disabled={isMealSaved || !!bookmarkingKey}
-                className="w-full flex items-center justify-center gap-1.5 font-mono text-[10px] uppercase tracking-[0.12em] py-2 rounded-lg transition-colors disabled:cursor-default"
+                disabled={!!bookmarkingKey}
+                className="w-full flex items-center justify-center gap-1.5 font-mono text-[10px] uppercase tracking-[0.12em] py-2 rounded-lg transition-colors"
                 style={{
-                  background: isMealSaved ? "rgba(122,158,126,0.12)" : "rgba(45,74,53,0.08)",
-                  color: isMealSaved ? "var(--deep-green)" : "var(--sage)",
+                  background: "rgba(45,74,53,0.08)",
+                  color: "var(--sage)",
                   border: "1px solid rgba(122,158,126,0.2)",
                 }}
               >
-                <BookmarkIcon filled={isMealSaved} />
-                {bookmarkingKey ? "Saving…" : isMealSaved ? "Saved" : "Save to Recipes"}
+                <BookmarkIcon filled={false} />
+                {bookmarkingKey ? "Saving…" : "Save to Recipes"}
               </button>
-            )}
+            ) : null}
 
             {/* View recipe link */}
             {savedRecipeId && (
@@ -533,6 +585,7 @@ type RowDef =
 
 function buildRows(
   days: Record<string, DayPlan>,
+  activeDays: DayName[],
   solidSlots: MealSlot[],
   maxJuices: number,
   extraSlots: string[],
@@ -546,7 +599,7 @@ function buildRows(
 
   // Juices — detect time priority from the first day that has this juice
   for (let i = 0; i < maxJuices; i++) {
-    const sample = DAYS.map((d) => (days[d]?.juices ?? [])[i]).find(Boolean);
+    const sample = activeDays.map((d) => (days[d]?.juices ?? [])[i]).find(Boolean);
     const priority = juiceTimePriority(sample);
     const label = sample
       ? (sample.tags ?? []).find((t) =>
@@ -562,7 +615,7 @@ function buildRows(
   }
 
   // Snacks
-  if (DAYS.some((d) => (days[d]?.snacks ?? []).length > 0)) {
+  if (activeDays.some((d) => (days[d]?.snacks ?? []).length > 0)) {
     rows.push({ kind: "snacks" });
   }
 
@@ -679,9 +732,19 @@ function MealCell({
           {meal.name}
         </p>
       </div>
-      <p className="font-mono text-[9px]" style={{ color: "var(--text-muted)", paddingLeft: "14px" }}>
-        {meal.prep_minutes}m
-      </p>
+      <div className="flex items-center gap-2" style={{ paddingLeft: "14px" }}>
+        <p className="font-mono text-[9px]" style={{ color: "var(--text-muted)" }}>
+          {meal.prep_minutes}m
+        </p>
+        {meal.source === "user_recipe" && (
+          <span
+            className="font-display text-[8px] px-1 rounded"
+            style={{ background: "rgba(45,74,53,0.1)", color: "var(--deep-green)" }}
+          >
+            ★ your recipe
+          </span>
+        )}
+      </div>
     </button>
   );
 }
@@ -760,6 +823,36 @@ function EmptyCell() {
         border: "1px dashed rgba(122,158,126,0.1)",
       }}
     />
+  );
+}
+
+/** Skeleton shown for a day column that hasn't been revealed yet. */
+function RevealingCell() {
+  return (
+    <div
+      className="w-full rounded-lg animate-pulse"
+      style={{
+        minHeight: "72px",
+        background: "rgba(122,158,126,0.08)",
+        border: "1px solid rgba(122,158,126,0.1)",
+      }}
+    />
+  );
+}
+
+function DayNutritionStrip({ nutrition }: { nutrition: NutritionAvg }) {
+  return (
+    <div
+      className="rounded-lg px-1.5 py-1.5 space-y-0.5"
+      style={{ background: "rgba(122,158,126,0.08)", border: "1px solid rgba(122,158,126,0.12)" }}
+    >
+      <p className="font-mono text-[8px] leading-tight" style={{ color: "var(--deep-green)" }}>
+        {nutrition.calories} kcal
+      </p>
+      <p className="font-mono text-[7px] leading-tight" style={{ color: "var(--text-muted)" }}>
+        P{nutrition.protein_g} · C{nutrition.carbs_g} · F{nutrition.fat_g} · Fi{nutrition.fiber_g}
+      </p>
+    </div>
   );
 }
 

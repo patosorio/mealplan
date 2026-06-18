@@ -49,6 +49,7 @@ class UserPreferences(Base):
         ARRAY(Text()), server_default="{}"
     )
     preferences_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    raw_cooked_ratio: Mapped[str] = mapped_column(Text, server_default="80_20")
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )

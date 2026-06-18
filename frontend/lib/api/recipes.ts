@@ -14,6 +14,7 @@ export interface Recipe {
   diet_type: string | null;
   prep_minutes: number | null;
   source: string;
+  type: "raw" | "cooked" | "juice" | null;
   origin_plan_id: string | null;
   origin_day: string | null;
   origin_meal: string | null;
@@ -99,6 +100,76 @@ export function useConfirmRecipe() {
       apiFetch<RecipeExpanded>("/recipes/import/confirm", {
         method: "POST",
         body: JSON.stringify(draft),
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["recipes"] });
+    },
+  });
+}
+
+export interface RecipeCreateRequest {
+  name: string;
+  description?: string;
+  ingredients: RecipeImportConfirmRequest["ingredients"];
+  steps: RecipeImportConfirmRequest["steps"];
+  tags?: string[];
+  diet_type?: string | null;
+  prep_minutes?: number | null;
+  servings?: number | null;
+}
+
+export interface RecipeUpdateRequest {
+  name?: string;
+  description?: string;
+  ingredients?: RecipeImportConfirmRequest["ingredients"];
+  steps?: RecipeImportConfirmRequest["steps"];
+  tags?: string[];
+  diet_type?: string | null;
+  prep_minutes?: number | null;
+  servings?: number | null;
+}
+
+export function useCreateRecipe() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: RecipeCreateRequest) =>
+      apiFetch<Recipe>("/recipes", {
+        method: "POST",
+        body: JSON.stringify(body),
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["recipes"] });
+    },
+  });
+}
+
+export function useUpdateRecipe() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, body }: { id: string; body: RecipeUpdateRequest }) =>
+      apiFetch<Recipe>(`/recipes/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify(body),
+      }),
+    onSuccess: (_data, { id }) => {
+      qc.invalidateQueries({ queryKey: ["recipes"] });
+      qc.invalidateQueries({ queryKey: ["recipes", id, "expand"] });
+    },
+  });
+}
+
+export function useGenerateFromIngredients() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: {
+      ingredients: string[];
+      target_type: "juice" | "smoothie" | "raw_meal" | "cooked_meal";
+      servings?: number;
+      save?: boolean;
+    }) =>
+      apiFetch<RecipeDraft | Recipe>("/recipes/generate-from-ingredients", {
+        method: "POST",
+        body: JSON.stringify(body),
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["recipes"] });

@@ -17,7 +17,7 @@ const dmMono = DM_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "PatriEats",
+  title: "Nouri",
   description: "Your personalised plant-based meal planner.",
 };
 

@@ -26,7 +26,7 @@ _VALID_TAGS = (
 )
 
 _SYSTEM_PROMPT = (
-    "You are PatriEats, an expert plant-based chef. Your job is to extract "
+    "You are Nouri, an expert plant-based chef. Your job is to extract "
     "structured recipe data from any input — photos of dishes, recipe screenshots, "
     "handwritten notes, URLs, ingredient lists, or just a dish name. "
     "You ALWAYS respond with ONLY valid JSON. No prose, no markdown fences. "
@@ -59,7 +59,7 @@ ONLY this JSON structure:
 Rules:
 - ingredients: 2-15 items, realistic quantities for 2 servings
 - steps: 2-10 steps
-- tags: 2-6 tags, prefer VALID_TAGS but include custom tags when they fit
+- tags: 2-6 tags chosen ONLY from VALID_TAGS above — do not invent custom tags
 - servings: integer number of portions (default 2 if not stated)
 - If input is just a dish name with no details, set extraction_confidence="low"
   and generate a reasonable plant-based version of that dish
@@ -108,9 +108,15 @@ async def extract_recipe_from_input(
 
     client = _get_client()
     response = await client.messages.create(
-        model=settings.claude_model,
+        model=settings.claude_haiku_model,
         max_tokens=_MAX_TOKENS,
-        system=_SYSTEM_PROMPT,
+        system=[
+            {
+                "type": "text",
+                "text": _SYSTEM_PROMPT,
+                "cache_control": {"type": "ephemeral"},
+            }
+        ],
         messages=[{"role": "user", "content": blocks}],
     )
 
@@ -127,3 +133,33 @@ async def extract_recipe_from_input(
     except Exception as exc:
         logger.warning("recipe_importer: RecipeDraft validation failed: %s", exc)
         raise ValueError(f"Extracted recipe failed validation: {exc}") from exc
+
+
+async def generate_from_ingredients(
+    ingredients: list[str],
+    target_type: str,
+    servings: int = 2,
+) -> RecipeDraft:
+    """Generate a recipe draft from a list of on-hand ingredients."""
+    client = _get_client()
+    prompt = (
+        f"Create a plant-based {target_type.replace('_', ' ')} recipe using "
+        f"these ingredients: {', '.join(ingredients)}.\n"
+        f"Target servings: {servings}.\n\n"
+        + _INSTRUCTION
+    )
+    response = await client.messages.create(
+        model=settings.claude_haiku_model,
+        max_tokens=_MAX_TOKENS,
+        system=[
+            {
+                "type": "text",
+                "text": _SYSTEM_PROMPT,
+                "cache_control": {"type": "ephemeral"},
+            }
+        ],
+        messages=[{"role": "user", "content": prompt}],
+    )
+    raw = response.content[0].text if response.content else ""
+    data = json.loads(raw)
+    return RecipeDraft.model_validate(data)

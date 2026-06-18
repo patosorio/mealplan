@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from models import GeneratedMeal, MealPlan, UserPreferences
 from schemas.meal_plan import GeneratePlanRequest, MealPlanResponse
-from services.ai.orchestrator import run_pipeline
+from services.ai.orchestrator import run_pipeline, run_single_day_pipeline
 from services.signal_service import log_signal
 
 
@@ -44,6 +44,9 @@ async def generate_and_persist(
             plan_id=plan_id,
             extras=list(request.extras) if request.extras else [],
             juicing_config=request.juicing_config,
+            plan_days=request.plan_days,
+            raw_cooked_ratio=request.raw_cooked_ratio,
+            recipe_usage_policy=request.recipe_usage_policy,
         )
     except HTTPException:
         raise  # re-raise clean HTTP errors from inside the pipeline
@@ -56,7 +59,7 @@ async def generate_and_persist(
     # Flatten each DayPlan into JSON-serialisable dicts
     days_data: dict[str, Any] = {}
     for day, day_plan in plan_response.days.items():
-        days_data[day] = {
+        day_entry: dict[str, Any] = {
             "breakfast": day_plan.breakfast.model_dump() if day_plan.breakfast else None,
             "lunch": day_plan.lunch.model_dump() if day_plan.lunch else None,
             "dinner": day_plan.dinner.model_dump() if day_plan.dinner else None,
@@ -64,6 +67,17 @@ async def generate_and_persist(
             "extras": [e.model_dump() for e in day_plan.extras],
             "snacks": day_plan.snacks,
         }
+        if day_plan.nutrition:
+            day_entry["nutrition"] = day_plan.nutrition.model_dump()
+        days_data[day] = day_entry
+
+    nutrition_by_day: dict[str, Any] = {
+        day: nutrition.model_dump()
+        for day, nutrition in plan_response.nutrition_by_day.items()
+    }
+    for day, day_plan in plan_response.days.items():
+        if day_plan.nutrition and day not in nutrition_by_day:
+            nutrition_by_day[day] = day_plan.nutrition.model_dump()
 
     meal_plan = MealPlan(
         id=plan_id,
@@ -72,12 +86,10 @@ async def generate_and_persist(
         diet_type=request.diet_type,
         plan_data={
             "days": days_data,
-            "nutrition_by_day": {
-                day: nutrition.model_dump()
-                for day, nutrition in plan_response.nutrition_by_day.items()
-            },
+            "nutrition_by_day": nutrition_by_day,
         },
         nutrition_avg=plan_response.nutrition_avg.model_dump(),
+        plan_days=request.plan_days,
     )
     db.add(meal_plan)
     await db.commit()
@@ -125,7 +137,7 @@ async def regenerate_day(
     )
     prefs = prefs_result.scalar_one_or_none()
 
-    new_plan_response: MealPlanResponse = await run_pipeline(
+    new_day_plan = await run_single_day_pipeline(
         db=db,
         user_id=user_id,
         diet_type=plan.diet_type,
@@ -133,17 +145,9 @@ async def regenerate_day(
         meals_per_day=["breakfast", "lunch", "dinner"],
         exclude_ingredients=list(prefs.excluded_ingredients) if prefs else [],
         preferences_text=prefs.preferences_text if prefs else None,
-        week_start=plan.week_start,
-        plan_id=plan_id,
+        day=day,
     )
 
-    if day not in new_plan_response.days:
-        raise HTTPException(
-            status_code=422,
-            detail=f"Day '{day}' not found in regenerated plan.",
-        )
-
-    new_day_plan = new_plan_response.days[day]
     new_day_data: dict[str, Any] = {
         "breakfast": new_day_plan.breakfast.model_dump() if new_day_plan.breakfast else None,
         "lunch": new_day_plan.lunch.model_dump() if new_day_plan.lunch else None,
@@ -152,12 +156,18 @@ async def regenerate_day(
         "extras": [e.model_dump() for e in new_day_plan.extras],
         "snacks": new_day_plan.snacks,
     }
+    if new_day_plan.nutrition:
+        new_day_data["nutrition"] = new_day_plan.nutrition.model_dump()
 
     # Merge new day into existing plan_data
     updated_plan_data: dict[str, Any] = dict(plan.plan_data)
     updated_days: dict[str, Any] = dict(updated_plan_data.get("days", {}))
     updated_days[day] = new_day_data
     updated_plan_data["days"] = updated_days
+    if new_day_plan.nutrition:
+        nutrition_by_day = dict(updated_plan_data.get("nutrition_by_day", {}))
+        nutrition_by_day[day] = new_day_plan.nutrition.model_dump()
+        updated_plan_data["nutrition_by_day"] = nutrition_by_day
     plan.plan_data = updated_plan_data
 
     # Delete stale generated_meals rows for this day so re-save is clean
@@ -211,8 +221,7 @@ async def swap_meal(
     )
     prefs = prefs_result.scalar_one_or_none()
 
-    # Regenerate a full plan so Claude gives us a fresh, contextualised meal
-    fresh_plan: MealPlanResponse = await run_pipeline(
+    day_plan = await run_single_day_pipeline(
         db=db,
         user_id=user_id,
         diet_type=plan.diet_type,
@@ -220,23 +229,42 @@ async def swap_meal(
         meals_per_day=["breakfast", "lunch", "dinner"],
         exclude_ingredients=list(prefs.excluded_ingredients) if prefs else [],
         preferences_text=prefs.preferences_text if prefs else None,
-        week_start=plan.week_start,
-        plan_id=plan.id,
+        day=old_meal.day,
     )
 
-    day_plan = fresh_plan.days.get(old_meal.day)
-    if day_plan is None:
-        raise HTTPException(
-            status_code=422,
-            detail=f"Regenerated plan missing day '{old_meal.day}'.",
-        )
+    meal_type = old_meal.meal_type
+    if meal_type.startswith("juice_"):
+        try:
+            j_idx = int(meal_type.split("_", 1)[1])
+            juices = day_plan.juices
+            fresh_meal_item = juices[j_idx] if j_idx < len(juices) else None
+        except (ValueError, IndexError):
+            fresh_meal_item = None
+    else:
+        fresh_meal_item = getattr(day_plan, meal_type, None)
 
-    fresh_meal_item = getattr(day_plan, old_meal.meal_type, None)
     if fresh_meal_item is None:
         raise HTTPException(
             status_code=422,
-            detail=f"Regenerated plan missing meal_type '{old_meal.meal_type}'.",
+            detail=f"Regenerated day missing meal_type '{old_meal.meal_type}'.",
         )
+
+    # Update plan_data so calendar/grid reflect the swap
+    updated_plan_data: dict[str, Any] = dict(plan.plan_data)
+    updated_days: dict[str, Any] = dict(updated_plan_data.get("days", {}))
+    day_data = dict(updated_days.get(old_meal.day, {}))
+    if meal_type.startswith("juice_"):
+        j_idx = int(meal_type.split("_", 1)[1])
+        juices_list = list(day_data.get("juices", []))
+        while len(juices_list) <= j_idx:
+            juices_list.append(None)
+        juices_list[j_idx] = fresh_meal_item.model_dump()
+        day_data["juices"] = juices_list
+    else:
+        day_data[meal_type] = fresh_meal_item.model_dump()
+    updated_days[old_meal.day] = day_data
+    updated_plan_data["days"] = updated_days
+    plan.plan_data = updated_plan_data
 
     # Mark old meal as swapped
     old_meal.approval_status = "swapped"
@@ -283,7 +311,7 @@ async def sync_generated_meals_from_plan(
             continue
 
         for meal_type, meal in day_meals.items():
-            if meal_type in ("snacks", "extras", "juices") or not isinstance(meal, dict):
+            if meal_type in ("snacks", "extras", "juices", "nutrition") or not isinstance(meal, dict):
                 continue
             if (day, meal_type) in existing_keys:
                 continue

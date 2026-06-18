@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { DayName, MealItem, MealSlot } from "@/lib/types";
 
 interface MealCardProps {
@@ -32,6 +32,10 @@ export function MealCard({
   const [bookmarking, setBookmarking] = useState(false);
   const [bookmarked, setBookmarked] = useState(isBookmarked);
   const [justSaved, setJustSaved] = useState(false);
+
+  useEffect(() => {
+    setBookmarked(isBookmarked);
+  }, [isBookmarked]);
 
   async function handleBookmark() {
     if (bookmarked || !onBookmark) return;
@@ -73,26 +77,22 @@ export function MealCard({
           {SLOT_LABELS[slot]}
         </div>
 
-        {/* Bookmark button */}
-        {onBookmark && (
+        {/* Bookmark button — hidden for user_recipe meals (already in their collection) */}
+        {bookmarked || meal.source === "user_recipe" ? null : onBookmark ? (
           <button
             onClick={handleBookmark}
-            disabled={bookmarked || bookmarking}
-            aria-label={bookmarked ? "Saved to recipes" : "Save to my recipes"}
-            className="flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-[0.12em] transition-all disabled:cursor-default"
+            disabled={bookmarking}
+            aria-label="Save to my recipes"
+            className="flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-[0.12em] transition-all"
             style={{
-              color: justSaved
-                ? "var(--deep-green)"
-                : bookmarked
-                ? "var(--terracotta)"
-                : "var(--sage)",
+              color: justSaved ? "var(--deep-green)" : "var(--sage)",
               opacity: bookmarking ? 0.6 : 1,
             }}
           >
-            <BookmarkIcon filled={bookmarked} />
-            {bookmarking ? "Saving…" : justSaved ? "Saved!" : bookmarked ? "Saved" : "Save"}
+            <BookmarkIcon filled={false} />
+            {bookmarking ? "Saving…" : justSaved ? "Saved!" : "Save"}
           </button>
-        )}
+        ) : null}
       </div>
 
       {/* Meal name */}

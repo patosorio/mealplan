@@ -289,7 +289,7 @@ function CalendarMealDetailPanel({
           : "1px dashed rgba(122,158,126,0.25)",
       }}
     >
-      {!selected ? (
+      {!selected || !entry ? (
         <div className="flex flex-col items-center justify-center text-center py-6 gap-2">
           <span style={{ color: "var(--sage)", opacity: 0.5, fontSize: "1.25rem" }}>✦</span>
           <p className="font-display italic text-[0.85rem]" style={{ color: "var(--text-muted)" }}>

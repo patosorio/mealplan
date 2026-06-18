@@ -1,10 +1,12 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
+  getStoredShoppingPlanId,
+  setStoredShoppingPlanId,
   useGenerateShoppingList,
-  useShoppingList,
+  useShoppingListByPlan,
   useToggleShoppingItem,
   useDeleteShoppingList,
 } from "@/lib/api/shopping";
@@ -12,31 +14,46 @@ import { useMealPlanHistory } from "@/lib/api/meal-plans";
 import { usePantry } from "@/lib/api/pantry";
 
 export default function ShoppingPage() {
-  const [activeListId, setActiveListId] = useState<string | null>(null);
-  const [selectedPlanId, setSelectedPlanId] = useState<string>("");
+  const storedPlanId = getStoredShoppingPlanId();
+  const [selectedPlanId, setSelectedPlanId] = useState<string>(storedPlanId ?? "");
 
   const { data: plans } = useMealPlanHistory();
   const { data: pantryItems } = usePantry();
   const generateMutation = useGenerateShoppingList();
-  const { data: list } = useShoppingList(activeListId);
+  const { data: list, isError: listNotFound } = useShoppingListByPlan(
+    selectedPlanId || null
+  );
   const toggleMutation = useToggleShoppingItem();
   const deleteMutation = useDeleteShoppingList();
 
+  useEffect(() => {
+    if (storedPlanId && !selectedPlanId) {
+      setSelectedPlanId(storedPlanId);
+    }
+  }, [storedPlanId, selectedPlanId]);
+
+  useEffect(() => {
+    if (selectedPlanId) {
+      setStoredShoppingPlanId(selectedPlanId);
+    }
+  }, [selectedPlanId]);
+
   async function handleGenerate() {
     if (!selectedPlanId) return;
-    const result = await generateMutation.mutateAsync(selectedPlanId);
-    setActiveListId(result.id);
+    await generateMutation.mutateAsync(selectedPlanId);
   }
 
   async function handleDelete() {
-    if (!activeListId) return;
-    await deleteMutation.mutateAsync(activeListId);
-    setActiveListId(null);
+    if (!list) return;
+    await deleteMutation.mutateAsync(list.id);
+    setStoredShoppingPlanId(null);
+    setSelectedPlanId("");
   }
 
   const checkedCount = list?.items.filter((i) => i.checked).length ?? 0;
   const totalCount = list?.items.length ?? 0;
   const pantryEmpty = (pantryItems?.length ?? 0) === 0;
+  const showList = !!list && !listNotFound;
 
   return (
     <div className="max-w-xl space-y-8">
@@ -52,73 +69,60 @@ export default function ShoppingPage() {
         </h1>
       </div>
 
-      {/* Generate form */}
-      {!list && (
-        <div
-          className="p-5 rounded-[14px] space-y-4"
-          style={{ background: "white", border: "1px solid rgba(122,158,126,0.15)" }}
+      {/* Plan selector — always visible */}
+      <div
+        className="p-5 rounded-[14px] space-y-4"
+        style={{ background: "white", border: "1px solid rgba(122,158,126,0.15)" }}
+      >
+        <p className="font-mono text-[10px] uppercase tracking-[0.18em]" style={{ color: "var(--sage)" }}>
+          Meal plan
+        </p>
+        <select
+          value={selectedPlanId}
+          onChange={(e) => setSelectedPlanId(e.target.value)}
+          className="w-full px-4 py-3 rounded-lg font-display text-[0.9rem] outline-none"
+          style={{ background: "rgba(247,243,236,0.8)", border: "1px solid rgba(122,158,126,0.3)", color: "var(--deep-green)" }}
         >
-          <p className="font-mono text-[10px] uppercase tracking-[0.18em]" style={{ color: "var(--sage)" }}>
-            Generate from a meal plan
-          </p>
-          <select
-            value={selectedPlanId}
-            onChange={(e) => setSelectedPlanId(e.target.value)}
-            className="w-full px-4 py-3 rounded-lg font-display text-[0.9rem] outline-none"
-            style={{ background: "rgba(247,243,236,0.8)", border: "1px solid rgba(122,158,126,0.3)", color: "var(--deep-green)" }}
-          >
-            <option value="">Select a meal plan…</option>
-            {plans?.map((plan) => {
-              const label = new Date(plan.week_start + "T00:00:00").toLocaleDateString(
-                "en-GB",
-                { day: "numeric", month: "long" }
-              );
-              return (
-                <option key={plan.id} value={plan.id}>
-                  Week of {label}
-                </option>
-              );
-            })}
-          </select>
-          <button
-            onClick={handleGenerate}
-            disabled={!selectedPlanId || generateMutation.isPending}
-            className="w-full py-3.5 rounded-lg font-mono text-[12px] uppercase tracking-[0.15em] transition-colors disabled:opacity-50"
-            style={{ background: "var(--deep-green)", color: "var(--cream)" }}
-          >
-            {generateMutation.isPending ? "Generating…" : "✦ Generate Shopping List"}
-          </button>
-        </div>
-      )}
+          <option value="">Select a meal plan…</option>
+          {plans?.map((plan) => {
+            const label = new Date(plan.week_start + "T00:00:00").toLocaleDateString(
+              "en-GB",
+              { day: "numeric", month: "long" }
+            );
+            return (
+              <option key={plan.id} value={plan.id}>
+                {plan.name ?? `Week of ${label}`}
+              </option>
+            );
+          })}
+        </select>
+        <button
+          onClick={handleGenerate}
+          disabled={!selectedPlanId || generateMutation.isPending}
+          className="w-full py-3.5 rounded-lg font-mono text-[12px] uppercase tracking-[0.15em] transition-colors disabled:opacity-50"
+          style={{ background: "var(--deep-green)", color: "var(--cream)" }}
+        >
+          {generateMutation.isPending ? "Generating…" : showList ? "↻ Refresh list" : "✦ Generate Shopping List"}
+        </button>
+      </div>
 
       {/* Shopping list */}
-      {list && (
+      {showList && (
         <div className="space-y-4">
-          {/* Progress header */}
           <div className="flex items-center justify-between">
             <p className="font-mono text-[10px] uppercase tracking-[0.18em]" style={{ color: "var(--sage)" }}>
               {checkedCount} / {totalCount} items
             </p>
-            <div className="flex gap-2">
-              <button
-                onClick={() => setActiveListId(null)}
-                className="font-mono text-[10px] uppercase tracking-[0.12em] px-3 py-1.5 rounded-lg"
-                style={{ border: "1px solid rgba(122,158,126,0.3)", color: "var(--sage)" }}
-              >
-                New list
-              </button>
-              <button
-                onClick={handleDelete}
-                disabled={deleteMutation.isPending}
-                className="font-mono text-[10px] uppercase tracking-[0.12em] px-3 py-1.5 rounded-lg"
-                style={{ border: "1px solid rgba(196,122,74,0.3)", color: "var(--terracotta)" }}
-              >
-                Delete
-              </button>
-            </div>
+            <button
+              onClick={handleDelete}
+              disabled={deleteMutation.isPending}
+              className="font-mono text-[10px] uppercase tracking-[0.12em] px-3 py-1.5 rounded-lg"
+              style={{ border: "1px solid rgba(196,122,74,0.3)", color: "var(--terracotta)" }}
+            >
+              Delete
+            </button>
           </div>
 
-          {/* Progress bar */}
           <div className="h-1.5 rounded-full overflow-hidden" style={{ background: "rgba(122,158,126,0.2)" }}>
             <div
               className="h-full rounded-full transition-all"
@@ -150,7 +154,7 @@ export default function ShoppingPage() {
             <ul className="space-y-1.5">
               {list.items.map((item, idx) => (
                 <li
-                  key={idx}
+                  key={`${item.name}-${idx}`}
                   className="flex items-center gap-3 px-4 py-3 rounded-lg cursor-pointer transition-colors"
                   style={{
                     background: item.checked ? "rgba(122,158,126,0.08)" : "white",
@@ -164,7 +168,6 @@ export default function ShoppingPage() {
                     })
                   }
                 >
-                  {/* Checkbox */}
                   <span
                     className="w-4 h-4 rounded flex items-center justify-center flex-shrink-0 transition-colors"
                     style={{
@@ -207,6 +210,12 @@ export default function ShoppingPage() {
             </ul>
           )}
         </div>
+      )}
+
+      {selectedPlanId && listNotFound && !generateMutation.isPending && (
+        <p className="font-display italic text-center py-4" style={{ color: "var(--text-muted)" }}>
+          No list for this plan yet — generate one above.
+        </p>
       )}
     </div>
   );

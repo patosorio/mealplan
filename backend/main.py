@@ -22,13 +22,14 @@ if _IS_PRODUCTION and any("localhost" in o for o in settings.cors_origins):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):  # type: ignore[type-arg]
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+    if settings.environment == "development":
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
     yield
 
 
 app = FastAPI(
-    title="PatriEats API",
+    title="Nouri API",
     lifespan=lifespan,
     docs_url=None if _IS_PRODUCTION else "/docs",
     redoc_url=None if _IS_PRODUCTION else "/redoc",

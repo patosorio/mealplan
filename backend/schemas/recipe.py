@@ -6,6 +6,8 @@ from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, field_validator
 
+from schemas.enums import DietType
+
 
 class RecipeIngredient(BaseModel):
     name: str
@@ -53,6 +55,7 @@ class RecipeRead(BaseModel):
     prep_minutes: Optional[int] = None
     servings: Optional[int] = None
     source: str
+    type: Optional[str] = None
     origin_plan_id: Optional[uuid.UUID] = None
     origin_day: Optional[str] = None
     origin_meal: Optional[str] = None
@@ -83,9 +86,53 @@ class RecipeImportConfirmRequest(BaseModel):
     ingredients: list[RecipeIngredient]
     steps: list[RecipeStep]
     tags: list[str]
-    diet_type: str | None = None
+    diet_type: DietType | None = None
     prep_minutes: int | None = None
     servings: int | None = None
+    type: Literal["raw", "cooked", "juice"] | None = None
+
+
+class RecipeCreateRequest(BaseModel):
+    """Manual recipe creation — no AI extraction."""
+
+    name: str
+    description: str = ""
+    ingredients: list[RecipeIngredient]
+    steps: list[RecipeStep]
+    tags: list[str] = []
+    diet_type: DietType | None = None
+    prep_minutes: int | None = None
+    servings: int | None = None
+
+
+class RecipeUpdate(BaseModel):
+    """Partial update for an existing recipe."""
+
+    name: str | None = None
+    description: str | None = None
+    ingredients: list[RecipeIngredient] | None = None
+    steps: list[RecipeStep] | None = None
+    tags: list[str] | None = None
+    diet_type: DietType | None = None
+    prep_minutes: int | None = None
+    servings: int | None = None
+
+
+class GenerateFromIngredientsRequest(BaseModel):
+    """Generate a recipe draft from on-hand ingredients."""
+
+    ingredients: list[str]
+    target_type: Literal["juice", "smoothie", "raw_meal", "cooked_meal"]
+    servings: int = 2
+    save: bool = False
+
+    @field_validator("ingredients")
+    @classmethod
+    def _non_empty_ingredients(cls, v: list[str]) -> list[str]:
+        cleaned = [i.strip() for i in v if i.strip()]
+        if not cleaned:
+            raise ValueError("At least one ingredient is required.")
+        return cleaned
 
 
 class SaveFromPlanRequest(BaseModel):

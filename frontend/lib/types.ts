@@ -1,5 +1,8 @@
 // ── API response types (mirrors backend schemas) ─────────────────────────────
 
+import type { DietType } from "@/lib/diet-types";
+
+export type { DietType };
 export type MealType = "raw" | "cooked" | "juice";
 export type MealSlot = "breakfast" | "lunch" | "dinner";
 export type ExtraSlot = "morning_juice" | "morning_snack" | "afternoon_snack" | "evening_tea";
@@ -30,6 +33,8 @@ export interface MealItem {
   prep_minutes: number;
   source: "generated" | "user_recipe" | "corpus";
   ingredients?: string[];
+  size_oz?: number | null;
+  size_ml?: number | null;
 }
 
 // ── Phase 8 types ─────────────────────────────────────────────────────────────
@@ -60,6 +65,7 @@ export interface DayPlan {
   juices: MealItem[];
   extras: ExtraItem[];
   snacks: string[];
+  nutrition?: NutritionAvg;
 }
 
 export interface NutritionAvg {
@@ -77,7 +83,7 @@ export interface MealPlan {
   id: string;
   user_id: string;
   week_start: string;
-  diet_type: string;
+  diet_type: DietType;
   plan_data: {
     days: Record<DayName, DayPlan>;
     nutrition_by_day?: Partial<Record<DayName, NutritionAvg>>;
@@ -89,6 +95,7 @@ export interface MealPlan {
   name: string | null;
   scheduled_week: string | null;
   approved_at: string | null;
+  plan_days?: number;
 }
 
 export interface GeneratedMeal {
@@ -109,8 +116,16 @@ export interface GeneratedMeal {
   edited_manually: boolean;
 }
 
+export type RecipeUsagePolicyMode = "balanced" | "prefer_saved" | "prefer_new";
+
+export interface RecipeUsagePolicy {
+  mode: RecipeUsagePolicyMode;
+  flexible_repeat_slots: string[];
+  ingredient_coherence: boolean;
+}
+
 export interface GeneratePlanRequest {
-  diet_type: string;
+  diet_type: DietType;
   calories_target: number;
   meals_per_day: MealSlot[];
   use_own_recipes: boolean;
@@ -118,6 +133,9 @@ export interface GeneratePlanRequest {
   exclude_ingredients: string[];
   preferences_text?: string;
   week_start: string;
+  plan_days?: number;
+  raw_cooked_ratio?: string;
+  recipe_usage_policy?: RecipeUsagePolicy;
   // Phase 8 — optional
   extras?: ExtraSlot[];
   juicing_config?: JuicingConfig | null;
@@ -158,6 +176,7 @@ export interface RecipeExpanded {
   tags: string[];
   diet_type: string | null;
   prep_minutes: number | null;
+  servings?: number | null;
   ingredients: RecipeIngredient[];
   steps: RecipeStep[];
   source: string;

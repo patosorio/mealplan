@@ -1,4 +1,4 @@
-# PatriEats
+# Nouri
 
 A personalised AI meal planner for plant-based eaters. Set your diet, goals, and preferences — the app generates a 7-day meal plan, lets you review and approve it, schedule it on a calendar, track your pantry, and produce a shopping list for what's missing. Save any AI-generated meal you love with one click; future plans get smarter every time you interact.
 

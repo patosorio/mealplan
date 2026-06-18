@@ -4,6 +4,9 @@ import Link from "next/link";
 import { use, useEffect, useState } from "react";
 import type { DayName, MealItem, MealPlan, MealSlot } from "@/lib/types";
 import { DAYS } from "@/lib/types";
+import { activeDaysFromPlan, buildSavedRecipeState } from "@/lib/meal-plan-utils";
+import { auth } from "@/lib/firebase";
+import { syncPlanToCalendar } from "@/lib/calendar";
 import {
   useMealPlan,
   usePlanMeals,
@@ -15,7 +18,6 @@ import {
   useSwapMeal,
 } from "@/lib/api/meal-plans";
 import { useRecipes } from "@/lib/api/recipes";
-import { buildSavedRecipeState } from "@/lib/meal-plan-utils";
 import { WeeklyPlanGrid } from "@/components/meal-plan/WeeklyPlanGrid";
 import { ReviewMealCard } from "@/components/meal-plan/ReviewMealCard";
 import { ApprovePlanModal } from "@/components/meal-plan/ApprovePlanModal";
@@ -40,7 +42,6 @@ export default function SavedPlanPage({
 
   const [savedMealIds, setSavedMealIds] = useState<Map<string, string>>(new Map());
   const [savedJuiceKeys, setSavedJuiceKeys] = useState<Set<string>>(new Set());
-  const [reviewMode, setReviewMode] = useState(false);
   const [activeDay, setActiveDay] = useState<DayName>(DAYS[0]);
   const [showApproveModal, setShowApproveModal] = useState(false);
   const [approveAcceptAll, setApproveAcceptAll] = useState(false);
@@ -57,10 +58,16 @@ export default function SavedPlanPage({
 
   useEffect(() => {
     if (!plan) return;
-    if (plan.status === "reviewing") setReviewMode(true);
     // Backfill generated_meals when bookmarking happened before Save Plan
     savePlanMutation.mutate(plan.id);
   }, [plan?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (!plan?.scheduled_week) return;
+    const uid = auth.currentUser?.uid;
+    if (!uid) return;
+    void syncPlanToCalendar(uid, plan, plan.scheduled_week);
+  }, [plan?.id, plan?.approved_at, plan?.plan_data, plan?.name, plan?.scheduled_week]);
 
   async function handleBookmark(_meal: MealItem, day: DayName, slot: MealSlot) {
     const saved = await saveFromPlanMutation.mutateAsync({
@@ -69,7 +76,6 @@ export default function SavedPlanPage({
       meal_type: slot,
     });
     setSavedMealIds((prev) => new Map([...prev, [`${id}-${day}-${slot}`, saved.id]]));
-    return saved;
   }
 
   async function handleBookmarkJuice(day: DayName, juiceIndex: number) {
@@ -85,7 +91,10 @@ export default function SavedPlanPage({
   async function handleEnterReview() {
     await savePlanMutation.mutateAsync(id);
     await patchPlanMutation.mutateAsync({ planId: id, body: { status: "reviewing" } });
-    setReviewMode(true);
+  }
+
+  async function handleExitReview() {
+    await patchPlanMutation.mutateAsync({ planId: id, body: { status: "draft" } });
   }
 
   async function handleAcceptMeal(mealId: string) {
@@ -114,7 +123,6 @@ export default function SavedPlanPage({
       body: { name, accept_all: approveAcceptAll },
     });
     setShowApproveModal(false);
-    setReviewMode(false);
     setApproveAcceptAll(false);
   }
 
@@ -160,6 +168,8 @@ export default function SavedPlanPage({
     totalActiveMeals.every((m) => m.approval_status === "accepted");
 
   const isApproved = plan.status === "approved";
+  const inReview = plan.status === "reviewing" && !isApproved;
+  const planDays = activeDaysFromPlan(plan);
   const hasReviewableMeals = planHasReviewableMeals(plan);
 
   return (
@@ -184,7 +194,7 @@ export default function SavedPlanPage({
               className="font-mono text-[11px] uppercase tracking-[0.2em] mt-4 mb-1"
               style={{ color: "var(--sage)" }}
             >
-              {isApproved ? "Approved Plan" : reviewMode ? "Review Mode" : "Saved Plan"}
+              {isApproved ? "Approved Plan" : inReview ? "Review Mode" : "Saved Plan"}
             </p>
             <h1
               className="font-display font-light leading-tight"
@@ -207,7 +217,7 @@ export default function SavedPlanPage({
         </div>
 
         {/* Review mode banner */}
-        {reviewMode && !isApproved && (
+        {inReview && (
           <div
             className="flex items-center justify-between gap-4 px-5 py-4 rounded-[14px] flex-wrap"
             style={{ background: "rgba(168,197,160,0.15)", border: "1px solid rgba(122,158,126,0.25)" }}
@@ -220,32 +230,40 @@ export default function SavedPlanPage({
                 Accept, edit or swap each meal — then approve when ready.
               </p>
             </div>
-            {allAccepted ? (
+            <div className="flex gap-2 flex-wrap">
               <button
-                onClick={() => openApproveModal(false)}
-                className="font-mono text-[11px] uppercase tracking-[0.15em] px-4 py-2.5 rounded-lg transition-colors"
-                style={{ background: "var(--deep-green)", color: "var(--cream)" }}
+                onClick={handleExitReview}
+                disabled={patchPlanMutation.isPending}
+                className="font-mono text-[11px] uppercase tracking-[0.15em] px-4 py-2.5 rounded-lg transition-colors disabled:opacity-50"
+                style={{ border: "1px solid rgba(122,158,126,0.4)", color: "var(--sage)" }}
               >
-                ✦ Approve Plan
+                Exit review
               </button>
-            ) : (
-              <button
-                onClick={() => openApproveModal(true)}
-                className="font-mono text-[11px] uppercase tracking-[0.15em] px-4 py-2.5 rounded-lg transition-colors"
-                style={{ background: "var(--deep-green)", color: "var(--cream)" }}
-              >
-                ✦ Approve All
-              </button>
-            )}
+              {allAccepted ? (
+                <button
+                  onClick={() => openApproveModal(false)}
+                  className="font-mono text-[11px] uppercase tracking-[0.15em] px-4 py-2.5 rounded-lg transition-colors"
+                  style={{ background: "var(--deep-green)", color: "var(--cream)" }}
+                >
+                  ✦ Approve Plan
+                </button>
+              ) : (
+                <button
+                  onClick={() => openApproveModal(true)}
+                  className="font-mono text-[11px] uppercase tracking-[0.15em] px-4 py-2.5 rounded-lg transition-colors"
+                  style={{ background: "var(--deep-green)", color: "var(--cream)" }}
+                >
+                  ✦ Approve All
+                </button>
+              )}
+            </div>
           </div>
         )}
 
-        {/* Review mode — day picker + meal cards */}
-        {reviewMode && !isApproved ? (
+        {inReview ? (
           <div className="space-y-6">
-            {/* Day picker */}
             <div className="flex gap-2 flex-wrap">
-              {DAYS.map((day) => {
+              {planDays.map((day) => {
                 const dayActiveMeals = (allMeals ?? []).filter(
                   (m) => m.day === day && m.approval_status !== "swapped"
                 );
@@ -305,7 +323,7 @@ export default function SavedPlanPage({
         ) : (
           /* Standard plan view — weekly grid with print */
           <div
-            className="p-5 rounded-[14px] print:p-0 print:border-0 print:bg-transparent"
+            className="p-4 sm:p-5 rounded-[14px] print:p-0 print:border-0 print:bg-transparent overflow-x-auto"
             style={{ background: "white", border: "1px solid rgba(122,158,126,0.15)" }}
           >
             <WeeklyPlanGrid
@@ -314,12 +332,13 @@ export default function SavedPlanPage({
               onBookmarkJuice={handleBookmarkJuice}
               savedMealIds={savedMealIds}
               savedJuiceKeys={savedJuiceKeys}
+              revealedDayCount={activeDaysFromPlan(plan).length}
             />
           </div>
         )}
 
         {/* Review / quick approve actions */}
-        {!reviewMode && !isApproved && hasReviewableMeals && (
+        {!inReview && !isApproved && hasReviewableMeals && (
           <div className="pt-2 flex gap-3 flex-wrap">
             <button
               onClick={handleEnterReview}
@@ -345,7 +364,7 @@ export default function SavedPlanPage({
 }
 
 function planHasReviewableMeals(plan: MealPlan): boolean {
-  return DAYS.some((day) => {
+  return activeDaysFromPlan(plan).some((day) => {
     const dp = plan.plan_data.days[day];
     if (!dp) return false;
     return (

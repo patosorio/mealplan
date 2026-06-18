@@ -4,7 +4,9 @@ import uuid
 from datetime import date, datetime
 from typing import Any, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, field_validator, model_validator
+
+from schemas.enums import DAY_ORDER, DietType, RawCookedRatio
 
 
 class MealItem(BaseModel):
@@ -17,6 +19,8 @@ class MealItem(BaseModel):
     prep_minutes: int
     source: Literal["generated", "user_recipe", "corpus"] = "generated"
     ingredients: list[str] = []
+    size_oz: int | None = None
+    size_ml: int | None = None
 
 
 # ── Phase 8 models ─────────────────────────────────────────────────────────────
@@ -68,6 +72,7 @@ class DayPlan(BaseModel):
     juices: list[MealItem] = []     # Phase 8 — juicing mode
     extras: list[ExtraItem] = []    # Phase 8 — structured add-ons
     snacks: list[str] = []          # kept for backward compatibility
+    nutrition: NutritionAvg | None = None
 
 
 class NutritionAvg(BaseModel):
@@ -92,9 +97,7 @@ class NutritionByDay(BaseModel):
 
 # ── Claude output schema ───────────────────────────────────────────────────────
 
-_VALID_DAYS = frozenset(
-    {"monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"}
-)
+_VALID_DAYS = frozenset(DAY_ORDER)
 
 
 class MealPlanResponse(BaseModel):
@@ -105,21 +108,36 @@ class MealPlanResponse(BaseModel):
 
     plan_id: uuid.UUID
     week_start: date
+    plan_days: int = 7
     nutrition_avg: NutritionAvg
     nutrition_by_day: dict[str, NutritionAvg] = {}
     days: dict[str, DayPlan]
 
     @field_validator("days")
     @classmethod
-    def _all_days_present(cls, v: dict[str, DayPlan]) -> dict[str, DayPlan]:
-        missing = _VALID_DAYS - set(v.keys())
-        if missing:
-            raise ValueError(f"Missing days in meal plan: {sorted(missing)}")
+    def _valid_day_keys(cls, v: dict[str, DayPlan]) -> dict[str, DayPlan]:
+        invalid = set(v.keys()) - _VALID_DAYS
+        if invalid:
+            raise ValueError(f"Invalid day names: {sorted(invalid)}")
         return v
+
+    @model_validator(mode="after")
+    def _day_count_matches_plan_days(self) -> "MealPlanResponse":
+        if len(self.days) != self.plan_days:
+            raise ValueError(
+                f"Expected {self.plan_days} days in plan, got {len(self.days)}"
+            )
+        return self
+
+
+class RecipeUsagePolicy(BaseModel):
+    mode: Literal["balanced", "prefer_saved", "prefer_new"] = "balanced"
+    flexible_repeat_slots: list[str] = []
+    ingredient_coherence: bool = True
 
 
 class GeneratePlanRequest(BaseModel):
-    diet_type: str = "raw_vegan_80_20"
+    diet_type: DietType = "raw_vegan_80_20"
     calories_target: int = 1800
     meals_per_day: list[str] = ["breakfast", "lunch", "dinner"]
     use_own_recipes: bool = True
@@ -127,9 +145,19 @@ class GeneratePlanRequest(BaseModel):
     exclude_ingredients: list[str] = []
     preferences_text: Optional[str] = None
     week_start: date
+    plan_days: int = 7
+    raw_cooked_ratio: RawCookedRatio = "80_20"
+    recipe_usage_policy: RecipeUsagePolicy = RecipeUsagePolicy()
     # Phase 8 — optional, backward-compatible
     extras: list[ExtraSlot] = []
     juicing_config: Optional[JuicingConfig] = None
+
+    @field_validator("plan_days")
+    @classmethod
+    def _plan_days_in_range(cls, v: int) -> int:
+        if v < 4 or v > 7:
+            raise ValueError("plan_days must be between 4 and 7")
+        return v
 
 
 # ── Phase 7 request schemas ────────────────────────────────────────────────────
@@ -181,6 +209,7 @@ class MealPlanRead(BaseModel):
     name: Optional[str] = None
     scheduled_week: Optional[date] = None
     approved_at: Optional[datetime] = None
+    plan_days: int = 7
 
 
 class GeneratedMealRead(BaseModel):

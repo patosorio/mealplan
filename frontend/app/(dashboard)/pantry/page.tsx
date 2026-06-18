@@ -47,8 +47,8 @@ export default function PantryPage() {
 
   return (
     <div className="space-y-8">
-      <div className="flex items-end justify-between gap-4">
-        <div>
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+        <div className="min-w-0">
           <p className="font-mono text-[11px] uppercase tracking-[0.2em] mb-3" style={{ color: "var(--sage)" }}>
             Your Pantry
           </p>
@@ -80,14 +80,14 @@ export default function PantryPage() {
         <p className="font-mono text-[10px] uppercase tracking-[0.18em]" style={{ color: "var(--sage)" }}>
           Add Item
         </p>
-        <div className="flex gap-2 flex-wrap">
+          <div className="flex flex-col sm:flex-row gap-2 sm:flex-wrap">
           <input
             type="text"
             value={name}
             onChange={(e) => setName(e.target.value)}
             placeholder="Ingredient name"
             required
-            className="flex-1 min-w-[160px] px-4 py-2.5 rounded-lg font-display text-[0.875rem] outline-none"
+            className="w-full sm:flex-1 sm:min-w-[160px] px-4 py-2.5 rounded-lg font-display text-[0.875rem] outline-none"
             style={{ background: "rgba(247,243,236,0.8)", border: "1px solid rgba(122,158,126,0.3)", color: "var(--deep-green)" }}
           />
           <input
@@ -95,7 +95,7 @@ export default function PantryPage() {
             value={quantity}
             onChange={(e) => setQuantity(e.target.value)}
             placeholder="Qty (opt.)"
-            className="w-28 px-4 py-2.5 rounded-lg font-display text-[0.875rem] outline-none"
+            className="w-full sm:w-28 px-4 py-2.5 rounded-lg font-display text-[0.875rem] outline-none"
             style={{ background: "rgba(247,243,236,0.8)", border: "1px solid rgba(122,158,126,0.3)", color: "var(--deep-green)" }}
           />
           <input
@@ -103,13 +103,13 @@ export default function PantryPage() {
             value={category}
             onChange={(e) => setCategory(e.target.value)}
             placeholder="Category (opt.)"
-            className="w-36 px-4 py-2.5 rounded-lg font-display text-[0.875rem] outline-none"
+            className="w-full sm:w-36 px-4 py-2.5 rounded-lg font-display text-[0.875rem] outline-none"
             style={{ background: "rgba(247,243,236,0.8)", border: "1px solid rgba(122,158,126,0.3)", color: "var(--deep-green)" }}
           />
           <button
             type="submit"
             disabled={addMutation.isPending || !name.trim()}
-            className="px-5 py-2.5 rounded-lg font-mono text-[11px] uppercase tracking-[0.15em] transition-colors disabled:opacity-50"
+            className="w-full sm:w-auto px-5 py-2.5 rounded-lg font-mono text-[11px] uppercase tracking-[0.15em] transition-colors disabled:opacity-50"
             style={{ background: "var(--deep-green)", color: "var(--cream)" }}
           >
             Add

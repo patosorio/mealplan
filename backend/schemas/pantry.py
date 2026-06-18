@@ -46,6 +46,7 @@ class ShoppingListRead(BaseModel):
     user_id: uuid.UUID
     meal_plan_id: Optional[uuid.UUID] = None
     items: list[dict[str, Any]]
+    plan_snapshot: Optional[dict[str, Any]] = None
     created_at: datetime
     updated_at: datetime
 

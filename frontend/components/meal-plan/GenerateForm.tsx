@@ -1,13 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import type {
-  ExtraSlot,
-  GeneratePlanRequest,
-  JuiceEntry,
-  JuicingConfig,
-  MealSlot,
-} from "@/lib/types";
+import type { ExtraSlot, GeneratePlanRequest, JuiceEntry, JuicingConfig, MealSlot, RecipeUsagePolicyMode } from "@/lib/types";
+import { DIET_OPTIONS, RAW_COOKED_OPTIONS, type DietType, type RawCookedRatio } from "@/lib/diet-types";
 import {
   formatWeekLabel,
   getDefaultWeekStart,
@@ -18,13 +13,6 @@ interface GenerateFormProps {
   onSubmit: (request: GeneratePlanRequest) => void;
   isLoading?: boolean;
 }
-
-const DIET_OPTIONS = [
-  { value: "raw_vegan_80_20", label: "Raw Vegan 80/20" },
-  { value: "whole_food_plant_based", label: "Whole Food Plant-Based" },
-  { value: "raw_vegan_100", label: "Raw Vegan 100%" },
-  { value: "vegan", label: "Vegan" },
-];
 
 const EXTRA_OPTIONS: { slot: ExtraSlot; label: string; hint: string }[] = [
   { slot: "morning_juice", label: "Morning juice", hint: "cold-pressed" },
@@ -52,12 +40,15 @@ export function GenerateForm({ onSubmit, isLoading = false }: GenerateFormProps)
   const [tab, setTab] = useState<Tab>("setup");
 
   // Setup tab state
-  const [dietType, setDietType] = useState("raw_vegan_80_20");
+  const [dietType, setDietType] = useState<DietType>("raw_vegan_80_20");
+  const [rawCookedRatio, setRawCookedRatio] = useState<RawCookedRatio>("80_20");
   const [weekStart, setWeekStart] = useState(getDefaultWeekStart);
+  const [planDays, setPlanDays] = useState(7);
   const [caloriesTarget, setCaloriesTarget] = useState(1800);
   const [excludeText, setExcludeText] = useState("");
   const [preferencesText, setPreferencesText] = useState("");
-  const [useOwnRecipes, setUseOwnRecipes] = useState(true);
+  const [recipeMode, setRecipeMode] = useState<RecipeUsagePolicyMode>("balanced");
+  const [repeatSlots, setRepeatSlots] = useState<string[]>([]);
   const [usePantry, setUsePantry] = useState(true);
 
   // Extras tab state
@@ -135,15 +126,22 @@ export function GenerateForm({ onSubmit, isLoading = false }: GenerateFormProps)
 
     onSubmit({
       diet_type: dietType,
+      raw_cooked_ratio: rawCookedRatio,
       calories_target: caloriesTarget,
       meals_per_day: juicingMode
         ? solidMeals
         : (["breakfast", "lunch", "dinner"] as MealSlot[]),
-      use_own_recipes: useOwnRecipes,
+      use_own_recipes: recipeMode !== "prefer_new",
       use_pantry: usePantry,
       exclude_ingredients: excludeIngredients,
       preferences_text: preferencesText.trim() || undefined,
       week_start: weekStart,
+      plan_days: planDays,
+      recipe_usage_policy: {
+        mode: recipeMode,
+        flexible_repeat_slots: repeatSlots,
+        ingredient_coherence: true,
+      },
       extras: selectedExtras.length > 0 ? selectedExtras : undefined,
       juicing_config: juicingConfig,
     });
@@ -195,11 +193,24 @@ export function GenerateForm({ onSubmit, isLoading = false }: GenerateFormProps)
           <Field label="Diet Style">
             <select
               value={dietType}
-              onChange={(e) => setDietType(e.target.value)}
+              onChange={(e) => setDietType(e.target.value as DietType)}
               className="w-full px-4 py-3 rounded-lg font-display text-[0.875rem] outline-none transition-colors"
               style={inputStyle}
             >
               {DIET_OPTIONS.map((opt) => (
+                <option key={opt.value} value={opt.value}>{opt.label}</option>
+              ))}
+            </select>
+          </Field>
+
+          <Field label="Raw / Cooked Ratio">
+            <select
+              value={rawCookedRatio}
+              onChange={(e) => setRawCookedRatio(e.target.value as RawCookedRatio)}
+              className="w-full px-4 py-3 rounded-lg font-display text-[0.875rem] outline-none transition-colors"
+              style={inputStyle}
+            >
+              {RAW_COOKED_OPTIONS.map((opt) => (
                 <option key={opt.value} value={opt.value}>{opt.label}</option>
               ))}
             </select>
@@ -216,6 +227,19 @@ export function GenerateForm({ onSubmit, isLoading = false }: GenerateFormProps)
             <p className="font-mono text-[9px] tracking-wide mt-1" style={{ color: "var(--text-muted)" }}>
               Week of {formatWeekLabel(weekStart)}
             </p>
+          </Field>
+
+          <Field label="Plan length" hint="4–7 days">
+            <select
+              value={planDays}
+              onChange={(e) => setPlanDays(parseInt(e.target.value, 10))}
+              className="w-full px-4 py-3 rounded-lg font-display text-[0.875rem] outline-none transition-colors"
+              style={inputStyle}
+            >
+              {[4, 5, 6, 7].map((n) => (
+                <option key={n} value={n}>{n} days</option>
+              ))}
+            </select>
           </Field>
 
           <Field label="Daily Calories" error={errors.calories}>
@@ -254,10 +278,105 @@ export function GenerateForm({ onSubmit, isLoading = false }: GenerateFormProps)
             />
           </Field>
 
-          <div className="flex gap-4 flex-wrap pt-1">
-            <Toggle label="My recipes" checked={useOwnRecipes} onChange={setUseOwnRecipes} />
-            <Toggle label="My pantry" checked={usePantry} onChange={setUsePantry} />
+          {/* Recipe usage policy */}
+          <div className="space-y-2 pt-1">
+            <label className="block font-display text-[0.8rem] font-medium uppercase tracking-widest" style={{ color: "var(--text-muted)" }}>
+              Recipes
+            </label>
+            <div className="grid grid-cols-3 gap-2">
+              <button
+                type="button"
+                onClick={() => setRecipeMode("prefer_new")}
+                className="p-3 rounded-lg border text-center transition-colors font-display"
+                style={{
+                  borderColor: recipeMode === "prefer_new" ? "rgba(122,158,126,0.6)" : "rgba(122,158,126,0.2)",
+                  background: recipeMode === "prefer_new" ? "rgba(122,158,126,0.15)" : "transparent",
+                  color: recipeMode === "prefer_new" ? "var(--deep-green)" : "var(--text-muted)",
+                }}
+              >
+                <div className="text-[0.8rem]">New recipes</div>
+                <div className="text-[0.65rem] opacity-0 mt-0.5">·</div>
+              </button>
+              <button
+                type="button"
+                onClick={() => setRecipeMode("balanced")}
+                className="p-3 rounded-lg border text-center transition-colors font-display"
+                style={{
+                  borderColor: recipeMode === "balanced" ? "rgba(122,158,126,0.6)" : "rgba(122,158,126,0.2)",
+                  background: recipeMode === "balanced" ? "rgba(122,158,126,0.15)" : "transparent",
+                  color: recipeMode === "balanced" ? "var(--deep-green)" : "var(--text-muted)",
+                }}
+              >
+                <div className="text-[0.8rem]">Mix</div>
+                <div className="text-[0.65rem] opacity-70 mt-0.5">(rec.)</div>
+              </button>
+              <button
+                type="button"
+                onClick={() => setRecipeMode("prefer_saved")}
+                className="p-3 rounded-lg border text-center transition-colors font-display"
+                style={{
+                  borderColor: recipeMode === "prefer_saved" ? "rgba(122,158,126,0.6)" : "rgba(122,158,126,0.2)",
+                  background: recipeMode === "prefer_saved" ? "rgba(122,158,126,0.15)" : "transparent",
+                  color: recipeMode === "prefer_saved" ? "var(--deep-green)" : "var(--text-muted)",
+                }}
+              >
+                <div className="text-[0.8rem]">My recipes</div>
+                <div className="text-[0.65rem] opacity-0 mt-0.5">·</div>
+              </button>
+            </div>
+
+            {/* Repeat slots — always mounted; invisible when prefer_new */}
+            <div className="min-h-[5.75rem] pt-1">
+              <div
+                className="space-y-1"
+                style={{
+                  visibility: recipeMode !== "prefer_new" ? "visible" : "hidden",
+                  pointerEvents: recipeMode !== "prefer_new" ? "auto" : "none",
+                }}
+              >
+                <label className="block font-display text-[0.75rem]" style={{ color: "var(--text-muted)" }}>
+                  Okay to occasionally reuse in:
+                </label>
+                <div className="flex flex-wrap gap-1">
+                  {(
+                    [
+                      { value: "breakfast", label: "Breakfast" },
+                      { value: "morning_juice", label: "Morning juice" },
+                      { value: "lunch", label: "Lunch" },
+                      { value: "dinner", label: "Dinner" },
+                      { value: "snack", label: "Snack" },
+                    ] as { value: string; label: string }[]
+                  ).map(({ value, label }) => {
+                    const active = repeatSlots.includes(value);
+                    return (
+                      <button
+                        key={value}
+                        type="button"
+                        onClick={() =>
+                          setRepeatSlots((prev) =>
+                            active ? prev.filter((s) => s !== value) : [...prev, value]
+                          )
+                        }
+                        className="px-2 py-1 rounded-full font-display text-[0.72rem] transition-colors"
+                        style={{
+                          background: active ? "var(--green-mid)" : "rgba(122,158,126,0.1)",
+                          color: active ? "#fff" : "var(--text-muted)",
+                          border: active ? "1px solid var(--green-mid)" : "1px solid transparent",
+                        }}
+                      >
+                        {label}
+                      </button>
+                    );
+                  })}
+                </div>
+                <p className="font-mono text-[9px] leading-relaxed mt-0.5" style={{ color: "var(--text-muted)", opacity: 0.7 }}>
+                  Claude may reuse a saved recipe in these slots but won&apos;t repeat it every day.
+                </p>
+              </div>
+            </div>
           </div>
+
+          <Toggle label="My pantry" checked={usePantry} onChange={setUsePantry} />
         </div>
       )}
 
@@ -267,7 +386,7 @@ export function GenerateForm({ onSubmit, isLoading = false }: GenerateFormProps)
           <p className="font-display text-[0.85rem] font-light italic" style={{ color: "var(--text-muted)" }}>
             Add structured snacks or drinks alongside your meals.
           </p>
-          <div className="grid grid-cols-2 gap-2">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
             {EXTRA_OPTIONS.map(({ slot, label, hint }) => {
               const active = selectedExtras.includes(slot);
               return (

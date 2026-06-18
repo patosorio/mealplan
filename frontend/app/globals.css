@@ -126,7 +126,7 @@
   }
 }
 
-/* ─── PatriEats design system ──────────────────────────────────────────────── */
+/* ─── Nouri design system ─────────────────────────────────────────────────── */
 
 @theme {
   /* Colour palette */
@@ -172,6 +172,11 @@ body {
 @keyframes fadeIn {
   from { opacity: 0; transform: translateY(6px); }
   to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes slideIn {
+  from { transform: translateX(-100%); }
+  to   { transform: translateX(0); }
 }
 
 .page-atmosphere {

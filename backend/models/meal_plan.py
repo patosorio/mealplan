@@ -37,6 +37,7 @@ class MealPlan(Base):
     approved_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    plan_days: Mapped[int] = mapped_column(Integer, nullable=False, server_default="7")
 
 
 class GeneratedMeal(Base):

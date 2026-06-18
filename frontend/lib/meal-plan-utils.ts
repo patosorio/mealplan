@@ -1,5 +1,5 @@
 import type { Recipe } from "@/lib/api/recipes";
-import type { DayName, DayPlan, MealItem, MealSlot } from "@/lib/types";
+import type { DayName, DayPlan, MealItem, MealPlan, MealSlot } from "@/lib/types";
 import { DAYS } from "@/lib/types";
 
 export interface DayScheduleEntry {
@@ -171,18 +171,34 @@ export function formatWeekLabel(weekStart: string): string {
   });
 }
 
+export function activeDaysFromPlan(plan: MealPlan): DayName[] {
+  const keys = new Set(Object.keys(plan.plan_data.days ?? {}));
+  const ordered = DAYS.filter((d) => keys.has(d));
+  if (ordered.length > 0) return ordered;
+  return DAYS.slice(0, plan.plan_days ?? 7);
+}
+
 export function buildSavedRecipeState(planId: string, recipes: Recipe[]) {
   const savedMealIds = new Map<string, string>();
   const savedJuiceKeys = new Set<string>();
 
   for (const r of recipes) {
     if (!r.origin_day || !r.origin_meal) continue;
+    const key = `${planId}-${r.origin_day}-${r.origin_meal}`;
     if (r.origin_meal.startsWith("juice_")) {
-      savedJuiceKeys.add(`${planId}-${r.origin_day}-${r.origin_meal}`);
+      savedJuiceKeys.add(key);
     } else {
-      savedMealIds.set(`${planId}-${r.origin_day}-${r.origin_meal}`, r.id);
+      savedMealIds.set(key, r.id);
     }
   }
 
   return { savedMealIds, savedJuiceKeys };
+}
+
+export function mealSlotKey(planId: string, day: string, meal: string): string {
+  return `${planId}-${day}-${meal}`;
+}
+
+export function juiceSlotKey(planId: string, day: string, index: number): string {
+  return `${planId}-${day}-juice_${index}`;
 }

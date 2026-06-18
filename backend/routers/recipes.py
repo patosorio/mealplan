@@ -7,18 +7,155 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.dependencies import get_current_db_user
+from db.background import run_with_session
 from db.session import get_db
 from models import GeneratedMeal, MealPlan, User, UserRecipe
-from schemas import RecipeExpandedRead, RecipeRead, SaveFromPlanRequest, SaveFromPlanResponse
+from schemas import (
+    GenerateFromIngredientsRequest,
+    RecipeCreateRequest,
+    RecipeDraft,
+    RecipeExpandedRead,
+    RecipeRead,
+    RecipeUpdate,
+    SaveFromPlanRequest,
+    SaveFromPlanResponse,
+)
+from services.ai.recipe_importer import generate_from_ingredients
 from services.profile_service import rebuild_taste_profile
 from services.recipe_service import (
+    embed_recipe_background,
     expand_recipe_background,
     get_or_expand_recipe,
     search_recipes as svc_search,
+    update_recipe,
 )
 from services.signal_service import log_signal
 
 router = APIRouter(prefix="/recipes", tags=["recipes"])
+
+
+def _infer_type_from_tags(tags: list[str]) -> str | None:
+    """Infer recipe type from tags when an explicit value is not available."""
+    lower = {t.lower() for t in tags}
+    if "juice" in lower or "smoothie" in lower:
+        return "juice"
+    if "raw" in lower or "raw vegan" in lower:
+        return "raw"
+    if "cooked" in lower or "warm" in lower:
+        return "cooked"
+    return None
+
+
+def _schedule_profile_rebuild(background_tasks: BackgroundTasks, user_id: uuid.UUID) -> None:
+    background_tasks.add_task(run_with_session, rebuild_taste_profile, user_id)
+
+
+def _schedule_recipe_expansion(
+    background_tasks: BackgroundTasks, recipe_id: uuid.UUID, user_id: uuid.UUID
+) -> None:
+    background_tasks.add_task(expand_recipe_background, recipe_id, user_id)
+
+
+@router.post("", response_model=RecipeRead, status_code=201)
+async def create_recipe(
+    body: RecipeCreateRequest,
+    background_tasks: BackgroundTasks,
+    user: User = Depends(get_current_db_user),
+    db: AsyncSession = Depends(get_db),
+) -> UserRecipe:
+    """Create a recipe manually without AI import."""
+    recipe = UserRecipe(
+        user_id=user.id,
+        name=body.name.strip(),
+        description=body.description,
+        ingredients=[i.model_dump() for i in body.ingredients],
+        steps=[s.model_dump() for s in body.steps],
+        tags=body.tags,
+        diet_type=body.diet_type,
+        prep_minutes=body.prep_minutes,
+        servings=body.servings,
+        source="manual",
+    )
+    db.add(recipe)
+    await db.commit()
+    await db.refresh(recipe)
+
+    background_tasks.add_task(embed_recipe_background, recipe.id, recipe.name, recipe.description)
+    _schedule_profile_rebuild(background_tasks, user.id)
+    return recipe
+
+
+@router.post("/generate-from-ingredients", response_model=RecipeRead | RecipeDraft)
+async def generate_recipe_from_ingredients(
+    body: GenerateFromIngredientsRequest,
+    background_tasks: BackgroundTasks,
+    user: User = Depends(get_current_db_user),
+    db: AsyncSession = Depends(get_db),
+) -> UserRecipe | RecipeDraft:
+    """Generate a recipe draft from on-hand ingredients; optionally save."""
+    draft = await generate_from_ingredients(
+        ingredients=body.ingredients,
+        target_type=body.target_type,
+        servings=body.servings,
+    )
+    if not body.save:
+        return draft
+
+    _TARGET_TYPE_MAP = {
+        "juice": "juice",
+        "smoothie": "juice",
+        "raw_meal": "raw",
+        "cooked_meal": "cooked",
+    }
+    recipe = UserRecipe(
+        user_id=user.id,
+        name=draft.name,
+        description=draft.description,
+        ingredients=[i.model_dump() for i in draft.ingredients],
+        steps=[s.model_dump() for s in draft.steps],
+        tags=draft.tags,
+        diet_type=draft.diet_type,
+        prep_minutes=draft.prep_minutes,
+        servings=draft.servings,
+        type=_TARGET_TYPE_MAP.get(body.target_type) or _infer_type_from_tags(draft.tags),
+        source="ai_generated",
+    )
+    db.add(recipe)
+    await db.commit()
+    await db.refresh(recipe)
+
+    background_tasks.add_task(embed_recipe_background, recipe.id, recipe.name, recipe.description)
+    _schedule_profile_rebuild(background_tasks, user.id)
+    return recipe
+
+
+@router.patch("/{recipe_id}", response_model=RecipeRead)
+async def patch_recipe(
+    recipe_id: uuid.UUID,
+    body: RecipeUpdate,
+    user: User = Depends(get_current_db_user),
+    db: AsyncSession = Depends(get_db),
+) -> UserRecipe:
+    """Partially update an existing recipe."""
+    recipe = await _get_recipe_or_404(db, recipe_id, user.id)
+    updates: dict[str, object] = {}
+    if body.name is not None:
+        updates["name"] = body.name.strip()
+    if body.description is not None:
+        updates["description"] = body.description
+    if body.ingredients is not None:
+        updates["ingredients"] = [i.model_dump() for i in body.ingredients]
+    if body.steps is not None:
+        updates["steps"] = [s.model_dump() for s in body.steps]
+    if body.tags is not None:
+        updates["tags"] = body.tags
+    if body.diet_type is not None:
+        updates["diet_type"] = body.diet_type
+    if body.prep_minutes is not None:
+        updates["prep_minutes"] = body.prep_minutes
+    if body.servings is not None:
+        updates["servings"] = body.servings
+    return await update_recipe(db, recipe, updates)
 
 
 @router.get("", response_model=list[RecipeRead])
@@ -113,12 +250,27 @@ async def save_from_plan(
             ingredients=[],
             steps=[],
             tags=juice_tags,
+            type="juice",
             source="ai_generated",
             origin_plan_id=body.meal_plan_id,
             origin_day=body.day,
             origin_meal=origin_meal_key,
         )
         db.add(recipe)
+
+        # Mark the corresponding generated_meals row saved if it exists
+        gm_result = await db.execute(
+            select(GeneratedMeal).where(
+                GeneratedMeal.meal_plan_id == body.meal_plan_id,
+                GeneratedMeal.day == body.day,
+                GeneratedMeal.meal_type == f"juice_{body.juice_index}",
+                GeneratedMeal.user_id == user.id,
+            )
+        )
+        gm_juice = gm_result.scalar_one_or_none()
+        if gm_juice is not None:
+            gm_juice.saved = True
+
         await db.commit()
         await db.refresh(recipe)
 
@@ -134,7 +286,7 @@ async def save_from_plan(
                 "tags": recipe.tags,
             },
         )
-        background_tasks.add_task(rebuild_taste_profile, user.id)
+        _schedule_profile_rebuild(background_tasks, user.id)
         return recipe
 
     # ── Standard meal path ─────────────────────────────────────────────────────
@@ -199,6 +351,7 @@ async def save_from_plan(
         ingredients=[],
         steps=[],
         tags=meal_tags,
+        type=meal.type or None,
         source="ai_generated",
         origin_plan_id=body.meal_plan_id,
         origin_day=body.day,
@@ -215,9 +368,8 @@ async def save_from_plan(
         "prep_minutes": meal.prep_minutes,
     })
 
-    # Fire-and-forget: rebuild taste profile + pre-expand new recipe
-    background_tasks.add_task(rebuild_taste_profile, db, user.id)
-    background_tasks.add_task(expand_recipe_background, db, recipe.id, user.id)
+    _schedule_profile_rebuild(background_tasks, user.id)
+    _schedule_recipe_expansion(background_tasks, recipe.id, user.id)
 
     return recipe
 

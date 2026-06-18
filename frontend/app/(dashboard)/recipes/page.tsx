@@ -2,30 +2,20 @@
 
 import Link from "next/link";
 import { useMemo, useState } from "react";
-import { useRecipes, useSearchRecipes, useDeleteRecipe } from "@/lib/api/recipes";
+import { useRecipes, useDeleteRecipe } from "@/lib/api/recipes";
 import type { Recipe } from "@/lib/api/recipes";
-import {
-  getRecipeType,
-  recipeMatchesTypeFilter,
-  type RecipeTypeFilter,
-} from "@/lib/recipe-utils";
-
-type TypeFilter = "all" | RecipeTypeFilter;
+import { getRecipeType } from "@/lib/recipe-utils";
+import { DIET_OPTIONS } from "@/lib/diet-types";
 
 export default function RecipesPage() {
-  const [query, setQuery] = useState("");
-  const [activeQuery, setActiveQuery] = useState("");
   const [activeTags, setActiveTags] = useState<string[]>([]);
-  const [typeFilter, setTypeFilter] = useState<TypeFilter>("all");
+  const [dietFilter, setDietFilter] = useState("");
+  const [typeFilter, setTypeFilter] = useState("");
 
-  const { data: allRecipes, isLoading: loadingAll } = useRecipes();
-  const { data: searchResults, isFetching: searching } = useSearchRecipes(activeQuery);
+  const { data: allRecipes, isLoading } = useRecipes();
   const deleteMutation = useDeleteRecipe();
 
-  // Base results from search OR full list
-  const baseRecipes: Recipe[] = activeQuery ? (searchResults ?? []) : (allRecipes ?? []);
-
-  // Derive unique tags across all recipes (not search-filtered — always shows full tag set)
+  // Derive unique tags sorted by frequency
   const allTags = useMemo(() => {
     const counts = new Map<string, number>();
     (allRecipes ?? []).forEach((r) => {
@@ -37,39 +27,27 @@ export default function RecipesPage() {
       .slice(0, 24);
   }, [allRecipes]);
 
-  // Derive available meal types from saved recipes (dynamic, not hardcoded)
-  const availableTypes = useMemo((): TypeFilter[] => {
-    const seen = new Set<RecipeTypeFilter>();
-    (allRecipes ?? []).forEach((r) => {
-      const t = getRecipeType(r);
-      if (t) seen.add(t);
-    });
-    return ["all", ...(["raw", "cooked", "juice"] as RecipeTypeFilter[]).filter((t) => seen.has(t))];
-  }, [allRecipes]);
-
-  // Apply client-side filters on top of the base list
+  // Client-side filtering: diet type, recipe type, tags — AND between types, OR within tags
   const displayRecipes = useMemo(() => {
-    let list = baseRecipes;
-    if (typeFilter !== "all") {
-      list = list.filter((r) => recipeMatchesTypeFilter(r, typeFilter));
-    }
-    if (activeTags.length > 0) {
-      list = list.filter((r) => activeTags.every((t) => r.tags.includes(t)));
-    }
-    return list;
-  }, [baseRecipes, typeFilter, activeTags]);
+    const list = allRecipes ?? [];
 
-  const isLoading = loadingAll || (!!activeQuery && searching);
+    return list.filter((r) => {
+      const matchesDiet =
+        !dietFilter ||
+        r.diet_type === dietFilter ||
+        r.diet_type === null;
 
-  function handleSearch(e: React.FormEvent) {
-    e.preventDefault();
-    setActiveQuery(query.trim());
-  }
+      const recipeType = getRecipeType(r);
+      const matchesType =
+        !typeFilter || recipeType === typeFilter.toLowerCase();
 
-  function clearSearch() {
-    setQuery("");
-    setActiveQuery("");
-  }
+      const matchesTags =
+        activeTags.length === 0 ||
+        activeTags.some((tag) => r.tags?.includes(tag));
+
+      return matchesDiet && matchesType && matchesTags;
+    });
+  }, [allRecipes, dietFilter, typeFilter, activeTags]);
 
   function toggleTag(tag: string) {
     setActiveTags((prev) =>
@@ -79,17 +57,17 @@ export default function RecipesPage() {
 
   function clearAllFilters() {
     setActiveTags([]);
-    setTypeFilter("all");
-    clearSearch();
+    setDietFilter("");
+    setTypeFilter("");
   }
 
-  const hasActiveFilters = activeTags.length > 0 || typeFilter !== "all" || !!activeQuery;
+  const hasActiveFilters = activeTags.length > 0 || !!dietFilter || !!typeFilter;
 
   return (
     <div className="space-y-7">
       {/* Header */}
-      <div className="flex items-start justify-between gap-4">
-        <div>
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+        <div className="min-w-0">
           <p className="font-mono text-[11px] uppercase tracking-[0.2em] mb-3" style={{ color: "var(--sage)" }}>
             My Recipes
           </p>
@@ -100,80 +78,85 @@ export default function RecipesPage() {
             Your saved <em className="italic" style={{ color: "var(--terracotta)" }}>favourites</em>
           </h1>
         </div>
-        <Link
-          href="/recipes/import"
-          className="shrink-0 inline-flex items-center gap-2 px-4 py-2.5 rounded-lg font-mono text-[10px] uppercase tracking-[0.15em] transition-opacity hover:opacity-80 mt-1"
-          style={{ background: "var(--deep-green)", color: "var(--cream)" }}
-        >
-          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5}>
-            <line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" />
-          </svg>
-          Add Recipe
-        </Link>
-      </div>
-
-      {/* Search bar */}
-      <form onSubmit={handleSearch} className="flex gap-2">
-        <input
-          type="text"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          placeholder="Search recipes…"
-          className="flex-1 px-4 py-3 rounded-lg font-display text-[0.9rem] outline-none"
-          style={{ background: "white", border: "1px solid rgba(122,158,126,0.3)", color: "var(--deep-green)" }}
-        />
-        {activeQuery ? (
-          <button
-            type="button"
-            onClick={clearSearch}
-            className="px-4 py-3 rounded-lg font-mono text-[11px] uppercase tracking-[0.15em]"
-            style={{ border: "1px solid rgba(122,158,126,0.3)", color: "var(--sage)" }}
+        <div className="flex gap-2 shrink-0 flex-wrap">
+          <Link
+            href="/recipes/new"
+            className="inline-flex items-center px-4 py-2.5 rounded-lg font-mono text-[10px] uppercase tracking-[0.15em] transition-opacity hover:opacity-80"
+            style={{ border: "1px solid rgba(45,74,53,0.25)", color: "var(--deep-green)" }}
           >
-            Clear
-          </button>
-        ) : (
-          <button
-            type="submit"
-            disabled={!query.trim()}
-            className="px-5 py-3 rounded-lg font-mono text-[11px] uppercase tracking-[0.15em] disabled:opacity-50"
+            Create
+          </Link>
+          <Link
+            href="/recipes/generate"
+            className="inline-flex items-center px-4 py-2.5 rounded-lg font-mono text-[10px] uppercase tracking-[0.15em] transition-opacity hover:opacity-80"
+            style={{ border: "1px solid rgba(45,74,53,0.25)", color: "var(--deep-green)" }}
+          >
+            From ingredients
+          </Link>
+          <Link
+            href="/recipes/import"
+            className="inline-flex items-center gap-2 px-4 py-2.5 rounded-lg font-mono text-[10px] uppercase tracking-[0.15em] transition-opacity hover:opacity-80"
             style={{ background: "var(--deep-green)", color: "var(--cream)" }}
           >
-            Search
-          </button>
-        )}
-      </form>
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5}>
+              <line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" />
+            </svg>
+            Import
+          </Link>
+        </div>
+      </div>
 
-      {/* ── Filters ──────────────────────────────────────────────────────── */}
+      {/* ── Filter bar ───────────────────────────────────────────────────── */}
       {(allRecipes ?? []).length > 0 && (
         <div className="space-y-3">
-          {/* Type filter */}
-          {availableTypes.length > 1 && (
-            <div className="flex items-center gap-2 flex-wrap">
-              <span className="font-mono text-[10px] uppercase tracking-[0.15em] mr-1" style={{ color: "var(--text-muted)" }}>
-                Type
-              </span>
-              {availableTypes.map((type) => (
-                <button
-                  key={type}
-                  type="button"
-                  onClick={() => setTypeFilter(type)}
-                  className="font-mono text-[10px] uppercase tracking-[0.12em] px-3 py-1.5 rounded-full transition-colors"
-                  style={{
-                    background: typeFilter === type ? "var(--deep-green)" : "rgba(122,158,126,0.1)",
-                    color: typeFilter === type ? "var(--cream)" : "var(--sage)",
-                    border: `1px solid ${typeFilter === type ? "var(--deep-green)" : "rgba(122,158,126,0.2)"}`,
-                  }}
-                >
-                  {type === "all" ? "All" : type}
-                </button>
-              ))}
+          {/* Dropdown filters row */}
+          <div className="flex flex-col sm:flex-row gap-2 sm:flex-wrap">
+            <div className="flex items-center gap-1.5 w-full sm:w-auto">
+              <span className="font-mono text-[10px] uppercase tracking-[0.13em] shrink-0" style={{ color: "var(--text-muted)" }}>Diet</span>
+              <select
+                value={dietFilter}
+                onChange={(e) => setDietFilter(e.target.value)}
+                className="flex-1 sm:flex-none px-3 py-2 rounded-lg font-mono text-[10px] uppercase tracking-[0.1em] outline-none"
+                style={{ background: "white", border: "1px solid rgba(122,158,126,0.3)", color: dietFilter ? "var(--deep-green)" : "var(--sage)" }}
+              >
+                <option value="">All</option>
+                {DIET_OPTIONS.map((o) => (
+                  <option key={o.value} value={o.value}>{o.label}</option>
+                ))}
+              </select>
             </div>
-          )}
 
-          {/* Tag filter pills */}
+            <div className="flex items-center gap-1.5 w-full sm:w-auto">
+              <span className="font-mono text-[10px] uppercase tracking-[0.13em] shrink-0" style={{ color: "var(--text-muted)" }}>Prep</span>
+              <select
+                value={typeFilter}
+                onChange={(e) => setTypeFilter(e.target.value)}
+                className="flex-1 sm:flex-none px-3 py-2 rounded-lg font-mono text-[10px] uppercase tracking-[0.1em] outline-none"
+                style={{ background: "white", border: "1px solid rgba(122,158,126,0.3)", color: typeFilter ? "var(--deep-green)" : "var(--sage)" }}
+              >
+                <option value="">All</option>
+                <option value="raw">Raw</option>
+                <option value="cooked">Cooked</option>
+                <option value="juice">Juice</option>
+              </select>
+            </div>
+
+            {hasActiveFilters && (
+              <button
+                type="button"
+                onClick={clearAllFilters}
+                className="font-mono text-[10px] uppercase tracking-[0.12em] px-3 py-2 rounded-lg transition-opacity hover:opacity-70"
+                style={{ color: "var(--terracotta)", border: "1px solid rgba(196,122,74,0.25)" }}
+              >
+                Clear filters
+              </button>
+            )}
+          </div>
+
+          {/* Tag multi-select */}
           {allTags.length > 0 && (
             <div className="flex items-start gap-2 flex-wrap">
-              <span className="font-mono text-[10px] uppercase tracking-[0.15em] mt-1.5 mr-1 flex-shrink-0" style={{ color: "var(--text-muted)" }}>
+              <span className="font-mono text-[10px] uppercase tracking-[0.15em] mt-1.5 mr-1 shrink-0" style={{ color: "var(--text-muted)" }}>
                 Tags
               </span>
               <div className="flex flex-wrap gap-1.5">
@@ -200,26 +183,12 @@ export default function RecipesPage() {
             </div>
           )}
 
-          {/* Clear filters row */}
+          {/* Result count */}
           {hasActiveFilters && (
-            <div className="flex items-center gap-3">
-              <p className="font-mono text-[10px] uppercase tracking-wide" style={{ color: "var(--text-muted)" }}>
-                {searching
-                  ? "Searching…"
-                  : `${displayRecipes.length} result${displayRecipes.length !== 1 ? "s" : ""}`}
-                {activeQuery && ` for "${activeQuery}"`}
-                {activeTags.length > 0 && ` · ${activeTags.length} tag${activeTags.length > 1 ? "s" : ""}`}
-                {typeFilter !== "all" && ` · ${typeFilter}`}
-              </p>
-              <button
-                type="button"
-                onClick={clearAllFilters}
-                className="font-mono text-[10px] uppercase tracking-[0.12em] transition-opacity hover:opacity-70"
-                style={{ color: "var(--terracotta)" }}
-              >
-                Clear all
-              </button>
-            </div>
+            <p className="font-mono text-[10px] uppercase tracking-wide" style={{ color: "var(--text-muted)" }}>
+              {displayRecipes.length} result{displayRecipes.length !== 1 ? "s" : ""}
+              {activeTags.length > 0 && ` · ${activeTags.length} tag${activeTags.length > 1 ? "s" : ""}`}
+            </p>
           )}
         </div>
       )}

@@ -15,13 +15,15 @@ from typing import Annotated
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.dependencies import get_current_db_user
+from db.background import run_with_session
 from db.session import get_db
 from models import User, UserRecipe
 from schemas import RecipeDraft, RecipeImportConfirmRequest, RecipeRead
 from services.ai import recipe_importer
-from services.ai.gemini_embedder import embed_text
+from services.recipe_service import embed_recipe_background
 from services.profile_service import rebuild_taste_profile
 from services.signal_service import log_signal
+from routers.recipes import _infer_type_from_tags
 
 logger = logging.getLogger(__name__)
 
@@ -107,6 +109,7 @@ async def confirm_recipe(
         diet_type=body.diet_type,
         prep_minutes=body.prep_minutes,
         servings=body.servings,
+        type=body.type or _infer_type_from_tags(body.tags),
         source="user",
         origin_plan_id=None,
         origin_day=None,
@@ -122,35 +125,7 @@ async def confirm_recipe(
         "source": "user",
     })
 
-    background_tasks.add_task(rebuild_taste_profile, db, user.id)
-    background_tasks.add_task(_embed_and_store, db, recipe.id, recipe.name, recipe.description)
+    background_tasks.add_task(run_with_session, rebuild_taste_profile, user.id)
+    background_tasks.add_task(embed_recipe_background, recipe.id, recipe.name, recipe.description)
 
     return recipe
-
-
-async def _embed_and_store(
-    db: AsyncSession,
-    recipe_id: object,
-    name: str,
-    description: str | None,
-) -> None:
-    """Background task: generate pgvector embedding and persist it."""
-    from sqlalchemy import select
-
-    from models import UserRecipe as _UserRecipe
-
-    try:
-        text = f"{name}. {description or ''}".strip()
-        embedding = await embed_text(text)
-
-        result = await db.execute(
-            select(_UserRecipe).where(_UserRecipe.id == recipe_id)
-        )
-        recipe = result.scalar_one_or_none()
-        if recipe is None:
-            return
-
-        recipe.embedding = embedding
-        await db.commit()
-    except Exception:
-        logger.exception("Embedding failed for imported recipe %s", recipe_id)

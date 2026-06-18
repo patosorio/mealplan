@@ -4,7 +4,9 @@ import uuid
 from datetime import datetime
 from typing import Optional
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_validator
+
+from schemas.enums import DietType, RawCookedRatio
 
 
 class UserProfile(BaseModel):
@@ -27,11 +29,13 @@ class UserPreferencesRead(BaseModel):
     calories_target: int
     excluded_ingredients: list[str]
     preferences_text: Optional[str] = None
+    raw_cooked_ratio: str = "80_20"
     updated_at: datetime
 
 
 class UserPreferencesUpdate(BaseModel):
-    diet_type: Optional[str] = None
+    diet_type: DietType | None = None
     calories_target: Optional[int] = None
     excluded_ingredients: Optional[list[str]] = None
     preferences_text: Optional[str] = None
+    raw_cooked_ratio: RawCookedRatio | None = None

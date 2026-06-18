@@ -26,6 +26,7 @@ from services.meal_plan_service import (
     swap_meal,
     sync_generated_meals_from_plan,
 )
+from db.background import run_with_session
 from services.signal_service import log_signal
 
 router = APIRouter(prefix="/meal-plans", tags=["meal plans"])
@@ -164,8 +165,8 @@ async def approve_meal_plan(
             if meal.approval_status == "pending":
                 meal.approval_status = "accepted"
                 background_tasks.add_task(
+                    run_with_session,
                     log_signal,
-                    db,
                     user.id,
                     "meal_accepted",
                     {
@@ -216,6 +217,7 @@ async def clone_meal_plan(
         diet_type=source.diet_type,
         plan_data=source.plan_data,
         nutrition_avg=source.nutrition_avg,
+        plan_days=source.plan_days,
         status="draft",
         name=source.name,
         scheduled_week=body.scheduled_week,
@@ -311,8 +313,8 @@ async def patch_generated_meal(
     await db.refresh(meal)
 
     background_tasks.add_task(
+        run_with_session,
         log_signal,
-        db,
         user.id,
         "meal_accepted",
         {
@@ -345,8 +347,8 @@ async def swap_generated_meal(
     new_meal = await swap_meal(db=db, old_meal=old_meal, user_id=user.id)
 
     background_tasks.add_task(
+        run_with_session,
         log_signal,
-        db,
         user.id,
         "meal_swapped",
         {

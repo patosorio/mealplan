@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     anthropic_api_key: str = ""
     # Override via CLAUDE_MODEL env var
     claude_model: str = "claude-sonnet-4-6"
+    claude_haiku_model: str = "claude-haiku-4-5"
     # Accepts GEMINI_API_KEY (canonical) or GOOGLE_API_KEY (Google AI Studio default)
     gemini_api_key: str = Field(
         default="",
@@ -42,6 +43,8 @@ class Settings(BaseSettings):
                 missing.append("ANTHROPIC_API_KEY")
             if not self.gemini_api_key:
                 missing.append("GEMINI_API_KEY")
+            if not self.internal_secret:
+                missing.append("INTERNAL_SECRET")
             if missing:
                 raise ValueError(
                     f"Required environment variables not set: {', '.join(missing)}"

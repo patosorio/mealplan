@@ -8,6 +8,7 @@ export interface UserPreferences {
   calories_target: number;
   excluded_ingredients: string[];
   preferences_text: string | null;
+  raw_cooked_ratio: string;
   updated_at: string;
 }
 
@@ -16,6 +17,7 @@ export interface UserPreferencesUpdate {
   calories_target?: number;
   excluded_ingredients?: string[];
   preferences_text?: string | null;
+  raw_cooked_ratio?: string;
 }
 
 export function usePreferences() {

@@ -64,6 +64,27 @@ async def delete_item(db: AsyncSession, item: PantryItem) -> None:
     await db.commit()
 
 
+async def upsert_pantry_item(
+    db: AsyncSession,
+    user_id: uuid.UUID,
+    name: str,
+    category: str | None = None,
+) -> PantryItem:
+    """Add pantry item if missing (case-insensitive name match)."""
+    clean_name = name.strip()
+    if not clean_name:
+        raise ValueError("Pantry item name is required.")
+
+    result = await db.execute(
+        select(PantryItem).where(PantryItem.user_id == user_id)
+    )
+    for item in result.scalars().all():
+        if item.name.lower() == clean_name.lower():
+            return item
+
+    return await add_item(db, user_id, clean_name, None, category)
+
+
 async def clear_all(db: AsyncSession, user_id: uuid.UUID) -> int:
     result = await db.execute(
         delete(PantryItem).where(PantryItem.user_id == user_id)

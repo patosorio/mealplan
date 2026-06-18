@@ -33,12 +33,13 @@ export function NutritionStrip({
 
   return (
     <div
-      className="rounded-[14px] px-6 py-4 flex items-center justify-between gap-4 flex-wrap"
+      className="rounded-[14px] px-4 sm:px-6 py-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4"
       style={{ background: "var(--deep-green)" }}
     >
-      <div className="flex items-center gap-4 flex-wrap flex-1">
+      <div className="overflow-x-auto max-w-full -mx-1 px-1 flex-1">
+        <div className="flex items-center gap-4 flex-nowrap min-w-max">
         {STATS.map(({ key, labelWeekly, labelDaily, unit }) => (
-          <div key={key} className="flex flex-col items-center gap-0.5 min-w-[60px]">
+          <div key={key} className="flex flex-col items-center gap-0.5 min-w-[60px] shrink-0">
             <span
               className="font-display text-[1.4rem] font-light leading-none"
               style={{ color: "var(--pale-gold)" }}
@@ -47,17 +48,18 @@ export function NutritionStrip({
               {unit}
             </span>
             <span
-              className="font-mono text-[9px] uppercase tracking-[0.18em]"
+              className="font-mono text-[9px] uppercase tracking-[0.18em] whitespace-nowrap"
               style={{ color: "rgba(232,213,163,0.6)" }}
             >
               {mode === "daily" ? labelDaily : labelWeekly}
             </span>
           </div>
         ))}
+        </div>
       </div>
 
       {canToggle && (
-        <div className="flex flex-col items-end gap-1">
+        <div className="flex flex-col items-start sm:items-end gap-1 shrink-0">
           <div
             className="flex rounded-lg p-0.5"
             style={{ background: "rgba(255,255,255,0.1)" }}

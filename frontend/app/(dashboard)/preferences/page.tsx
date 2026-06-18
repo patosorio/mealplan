@@ -2,19 +2,14 @@
 
 import { useEffect, useState } from "react";
 import { usePreferences, useUpdatePreferences } from "@/lib/api/preferences";
-
-const DIET_OPTIONS = [
-  { value: "raw_vegan_80_20", label: "Raw Vegan 80/20" },
-  { value: "whole_food_plant_based", label: "Whole Food Plant-Based" },
-  { value: "raw_vegan_100", label: "Raw Vegan 100%" },
-  { value: "vegan", label: "Vegan" },
-];
+import { DIET_OPTIONS, RAW_COOKED_OPTIONS, type DietType, type RawCookedRatio } from "@/lib/diet-types";
 
 export default function PreferencesPage() {
   const { data: prefs, isLoading } = usePreferences();
   const updateMutation = useUpdatePreferences();
 
-  const [dietType, setDietType] = useState("raw_vegan_80_20");
+  const [dietType, setDietType] = useState<DietType>("raw_vegan_80_20");
+  const [rawCookedRatio, setRawCookedRatio] = useState<RawCookedRatio>("80_20");
   const [caloriesTarget, setCaloriesTarget] = useState(1800);
   const [excludeText, setExcludeText] = useState("");
   const [preferencesText, setPreferencesText] = useState("");
@@ -23,7 +18,8 @@ export default function PreferencesPage() {
 
   useEffect(() => {
     if (prefs) {
-      setDietType(prefs.diet_type);
+      setDietType(prefs.diet_type as DietType);
+      setRawCookedRatio((prefs.raw_cooked_ratio || "80_20") as RawCookedRatio);
       setCaloriesTarget(prefs.calories_target);
       setExcludeText(prefs.excluded_ingredients.join(", "));
       setPreferencesText(prefs.preferences_text ?? "");
@@ -43,6 +39,7 @@ export default function PreferencesPage() {
     try {
       await updateMutation.mutateAsync({
         diet_type: dietType,
+        raw_cooked_ratio: rawCookedRatio,
         calories_target: caloriesTarget,
         excluded_ingredients: excluded,
         preferences_text: preferencesText.trim() || null,
@@ -83,11 +80,25 @@ export default function PreferencesPage() {
         <Field label="Diet Style">
           <select
             value={dietType}
-            onChange={(e) => setDietType(e.target.value)}
+            onChange={(e) => setDietType(e.target.value as DietType)}
             className="w-full px-4 py-3 rounded-lg font-display text-[0.9rem] outline-none"
             style={{ background: "white", border: "1px solid rgba(122,158,126,0.3)", color: "var(--deep-green)" }}
           >
             {DIET_OPTIONS.map((o) => (
+              <option key={o.value} value={o.value}>{o.label}</option>
+            ))}
+          </select>
+        </Field>
+
+        {/* Raw/Cooked ratio */}
+        <Field label="Raw / Cooked Ratio">
+          <select
+            value={rawCookedRatio}
+            onChange={(e) => setRawCookedRatio(e.target.value as RawCookedRatio)}
+            className="w-full px-4 py-3 rounded-lg font-display text-[0.9rem] outline-none"
+            style={{ background: "white", border: "1px solid rgba(122,158,126,0.3)", color: "var(--deep-green)" }}
+          >
+            {RAW_COOKED_OPTIONS.map((o) => (
               <option key={o.value} value={o.value}>{o.label}</option>
             ))}
           </select>

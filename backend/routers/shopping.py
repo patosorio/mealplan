@@ -2,8 +2,7 @@ from __future__ import annotations
 
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.attributes import flag_modified
 
@@ -11,10 +10,27 @@ from core.dependencies import get_current_db_user
 from db.session import get_db
 from models import ShoppingList, User
 from schemas import GenerateShoppingListRequest, ShoppingItemToggle, ShoppingListRead
-from services.shopping_service import generate_shopping_list as svc_generate
+from services.pantry_service import upsert_pantry_item
+from services.shopping_service import (
+    generate_shopping_list as svc_generate,
+    get_shopping_list_for_plan,
+)
 from services.signal_service import log_signal
 
 router = APIRouter(prefix="/shopping", tags=["shopping"])
+
+
+@router.get("", response_model=ShoppingListRead)
+async def get_shopping_list_by_plan(
+    meal_plan_id: uuid.UUID = Query(..., description="Meal plan to fetch list for"),
+    user: User = Depends(get_current_db_user),
+    db: AsyncSession = Depends(get_db),
+) -> ShoppingList:
+    """Return the most recent shopping list for a meal plan."""
+    shopping_list = await get_shopping_list_for_plan(db, user.id, meal_plan_id)
+    if shopping_list is None:
+        raise HTTPException(status_code=404, detail="Shopping list not found.")
+    return shopping_list
 
 
 @router.post("/generate", response_model=ShoppingListRead, status_code=201)
@@ -52,7 +68,7 @@ async def toggle_shopping_item(
 ) -> ShoppingList:
     """
     Toggle the checked state of a single item (addressed by its 0-based index).
-    Logs a 'shopping_purchased' signal when an item is checked off.
+    When checked, adds the item to the user's pantry if not already present.
     """
     shopping_list = await _get_list_or_404(db, list_id, user.id)
 
@@ -68,6 +84,12 @@ async def toggle_shopping_item(
     await db.refresh(shopping_list)
 
     if body.checked:
+        item_name = items[item_idx].get("name")
+        category = items[item_idx].get("category")
+        if item_name:
+            await upsert_pantry_item(
+                db, user.id, str(item_name), str(category) if category else None
+            )
         await log_signal(db, user.id, "shopping_purchased", {
             "item_name": items[item_idx].get("name"),
             "category": items[item_idx].get("category"),
@@ -87,11 +109,11 @@ async def delete_shopping_list(
     await db.commit()
 
 
-# ── helpers ───────────────────────────────────────────────────────────────────
-
 async def _get_list_or_404(
     db: AsyncSession, list_id: uuid.UUID, user_id: uuid.UUID
 ) -> ShoppingList:
+    from sqlalchemy import select
+
     result = await db.execute(
         select(ShoppingList).where(
             ShoppingList.id == list_id, ShoppingList.user_id == user_id

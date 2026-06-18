@@ -19,6 +19,9 @@ SignalType = Literal[
     "recipe_search",
     "shopping_purchased",
     "opened_recipe",
+    "meal_accepted",
+    "meal_swapped",
+    "recipe_bookmarked",
 ]
 
 

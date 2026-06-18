@@ -38,6 +38,8 @@ class UserRecipe(Base):
     prep_minutes: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     servings: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     source: Mapped[str] = mapped_column(Text, server_default="user")
+    # Explicit meal type: "raw", "cooked", or "juice". Nullable for legacy rows.
+    type: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     # Set when source='ai_generated' — traces back to the originating plan
     origin_plan_id: Mapped[Optional[uuid.UUID]] = mapped_column(

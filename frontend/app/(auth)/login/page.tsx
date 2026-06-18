@@ -45,7 +45,7 @@ export default function LoginPage() {
               color: "var(--deep-green)",
             }}
           >
-            Patri<em style={{ color: "var(--terracotta)", fontStyle: "italic" }}>Eats</em>
+            Nouri
           </h1>
           <p
             className="font-display text-[0.95rem] font-light italic mt-4 leading-relaxed"

@@ -6,6 +6,12 @@ export interface ShoppingList {
   user_id: string;
   meal_plan_id: string | null;
   items: ShoppingListItem[];
+  plan_snapshot?: {
+    plan_name?: string | null;
+    week_start?: string;
+    scheduled_week?: string | null;
+    diet_type?: string;
+  } | null;
   created_at: string;
   updated_at: string;
 }
@@ -15,6 +21,29 @@ export interface ShoppingListItem {
   qty: string | null;
   category: string | null;
   checked: boolean;
+}
+
+const SHOPPING_PLAN_KEY = "nouri:active-shopping-plan";
+
+export function getStoredShoppingPlanId(): string | null {
+  if (typeof window === "undefined") return null;
+  return localStorage.getItem(SHOPPING_PLAN_KEY);
+}
+
+export function setStoredShoppingPlanId(planId: string | null) {
+  if (typeof window === "undefined") return;
+  if (planId) localStorage.setItem(SHOPPING_PLAN_KEY, planId);
+  else localStorage.removeItem(SHOPPING_PLAN_KEY);
+}
+
+export function useShoppingListByPlan(mealPlanId: string | null) {
+  return useQuery({
+    queryKey: ["shopping", "by-plan", mealPlanId],
+    queryFn: () =>
+      apiFetch<ShoppingList>(`/shopping?meal_plan_id=${encodeURIComponent(mealPlanId!)}`),
+    enabled: !!mealPlanId,
+    retry: false,
+  });
 }
 
 export function useShoppingList(id: string | null) {
@@ -35,6 +64,10 @@ export function useGenerateShoppingList() {
       }),
     onSuccess: (data) => {
       qc.setQueryData(["shopping", data.id], data);
+      if (data.meal_plan_id) {
+        qc.setQueryData(["shopping", "by-plan", data.meal_plan_id], data);
+        setStoredShoppingPlanId(data.meal_plan_id);
+      }
     },
   });
 }
@@ -57,6 +90,9 @@ export function useToggleShoppingItem() {
       }),
     onSuccess: (data) => {
       qc.setQueryData(["shopping", data.id], data);
+      if (data.meal_plan_id) {
+        qc.setQueryData(["shopping", "by-plan", data.meal_plan_id], data);
+      }
     },
   });
 }

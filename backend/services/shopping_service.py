@@ -10,10 +10,29 @@ from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm.attributes import flag_modified
 
 from models import MealPlan, PantryItem, ShoppingList, UserRecipe
 
 logger = logging.getLogger(__name__)
+
+
+async def get_shopping_list_for_plan(
+    db: AsyncSession,
+    user_id: uuid.UUID,
+    meal_plan_id: uuid.UUID,
+) -> ShoppingList | None:
+    """Return the most recent shopping list for a meal plan, if any."""
+    result = await db.execute(
+        select(ShoppingList)
+        .where(
+            ShoppingList.user_id == user_id,
+            ShoppingList.meal_plan_id == meal_plan_id,
+        )
+        .order_by(ShoppingList.updated_at.desc())
+        .limit(1)
+    )
+    return result.scalar_one_or_none()
 
 
 async def generate_shopping_list(
@@ -22,9 +41,8 @@ async def generate_shopping_list(
     meal_plan_id: uuid.UUID,
 ) -> ShoppingList:
     """
-    Build a shopping list by diffing meal plan ingredients against pantry.
-    Pulls ingredients from plan_data meals, juices, and extras; falls back to
-    bookmarked user_recipes linked to this plan when plan_data has no ingredients.
+    Build or refresh a shopping list by diffing meal plan ingredients against pantry.
+    Reuses an existing list for the same plan when present, preserving checked state.
     """
     plan_result = await db.execute(
         select(MealPlan).where(
@@ -58,20 +76,55 @@ async def generate_shopping_list(
 
     raw_ingredients: list[str] = _extract_ingredients(plan.plan_data, saved_by_slot)
 
-    shopping_items: list[dict[str, Any]] = [
-        {"name": name, "qty": None, "category": None, "checked": False}
+    new_item_names = [
+        name
         for name in dict.fromkeys(raw_ingredients)
         if name.lower() not in pantry_names
     ]
 
-    shopping_list = ShoppingList(
-        user_id=user_id,
-        meal_plan_id=plan.id,
-        items=shopping_items,
-    )
-    db.add(shopping_list)
-    await db.commit()
-    await db.refresh(shopping_list)
+    existing = await get_shopping_list_for_plan(db, user_id, meal_plan_id)
+    checked_by_name: dict[str, bool] = {}
+    if existing:
+        for item in existing.items:
+            name = str(item.get("name", "")).strip()
+            if name:
+                checked_by_name[name.lower()] = bool(item.get("checked"))
+
+    shopping_items: list[dict[str, Any]] = [
+        {
+            "name": name,
+            "qty": None,
+            "category": None,
+            "checked": checked_by_name.get(name.lower(), False),
+        }
+        for name in new_item_names
+    ]
+
+    snapshot = {
+        "plan_name": plan.name,
+        "week_start": str(plan.week_start),
+        "scheduled_week": str(plan.scheduled_week) if plan.scheduled_week else None,
+        "diet_type": plan.diet_type,
+    }
+
+    if existing:
+        existing.items = shopping_items
+        existing.plan_snapshot = snapshot
+        flag_modified(existing, "items")
+        flag_modified(existing, "plan_snapshot")
+        await db.commit()
+        await db.refresh(existing)
+        shopping_list = existing
+    else:
+        shopping_list = ShoppingList(
+            user_id=user_id,
+            meal_plan_id=plan.id,
+            items=shopping_items,
+            plan_snapshot=snapshot,
+        )
+        db.add(shopping_list)
+        await db.commit()
+        await db.refresh(shopping_list)
 
     logger.info(
         "Generated shopping list for user %s — %d items",

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { DayName, ExtraItem, MealItem, MealPlan, MealSlot } from "@/lib/types";
 import { DAYS } from "@/lib/types";
 import { MealCard } from "./MealCard";
@@ -135,7 +135,7 @@ export function MealPlanView({
                 juiceIndex={i}
                 day={activeDay}
                 planId={plan.id}
-                onBookmark={onBookmarkJuice}
+                onBookmark={savedJuiceKeys?.has(`${plan.id}-${activeDay}-juice_${i}`) ? undefined : onBookmarkJuice}
                 isSaved={savedJuiceKeys?.has(`${plan.id}-${activeDay}-juice_${i}`)}
               />
             ))}
@@ -158,7 +158,7 @@ export function MealPlanView({
                 slot={slot}
                 day={activeDay}
                 planId={plan.id}
-                onBookmark={onBookmark}
+                onBookmark={savedRecipeId || meal.source === "user_recipe" ? undefined : onBookmark}
                 isBookmarked={!!savedRecipeId}
                 savedRecipeId={savedRecipeId}
               />
@@ -227,6 +227,10 @@ function JuiceCard({
   const [saved, setSaved] = useState(isSaved);
   const [justSaved, setJustSaved] = useState(false);
 
+  useEffect(() => {
+    setSaved(isSaved);
+  }, [isSaved]);
+
   async function handleSave() {
     if (saved || !onBookmark) return;
     setSaving(true);
@@ -252,21 +256,21 @@ function JuiceCard({
           <span>🥤</span>
           Juice
         </div>
-        {onBookmark && (
+        {!saved && onBookmark ? (
           <button
             onClick={handleSave}
-            disabled={saved || saving}
-            aria-label={saved ? "Saved" : "Save to recipes"}
-            className="flex items-center gap-1 font-mono text-[10px] uppercase tracking-[0.1em] transition-all disabled:cursor-default"
+            disabled={saving}
+            aria-label="Save to recipes"
+            className="flex items-center gap-1 font-mono text-[10px] uppercase tracking-[0.1em] transition-all"
             style={{
-              color: justSaved ? "var(--deep-green)" : saved ? "var(--terracotta)" : "#8b7035",
+              color: justSaved ? "var(--deep-green)" : "#8b7035",
               opacity: saving ? 0.6 : 1,
             }}
           >
-            <BookmarkIcon filled={saved} />
-            {saving ? "…" : justSaved ? "Saved!" : saved ? "Saved" : "Save"}
+            <BookmarkIcon filled={false} />
+            {saving ? "…" : justSaved ? "Saved!" : "Save"}
           </button>
-        )}
+        ) : null}
       </div>
       <h4 className="font-display text-[1rem] font-light leading-snug mb-1" style={{ color: "var(--deep-green)" }}>
         {juice.name}

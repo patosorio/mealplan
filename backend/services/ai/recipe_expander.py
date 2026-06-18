@@ -29,7 +29,7 @@ def _get_client() -> anthropic.AsyncAnthropic:
 
 def _build_system_prompt() -> str:
     return (
-        "You are PatriEats, an expert plant-based chef and nutritionist. "
+        "You are Nouri, an expert plant-based chef and nutritionist. "
         "You write clear, practical recipes for home cooks. "
         "You ALWAYS respond with ONLY valid JSON — no prose, no markdown fences."
     )
@@ -125,13 +125,18 @@ async def expand_recipe(
     Raises ValueError on malformed response, anthropic errors on API failure.
     """
     client = _get_client()
-    system = _build_system_prompt()
     user_msg = _build_user_prompt(name, description, tags, diet_type, prep_minutes)
 
     response = await client.messages.create(
-        model=settings.claude_model,
+        model=settings.claude_haiku_model,
         max_tokens=_MAX_TOKENS,
-        system=system,
+        system=[
+            {
+                "type": "text",
+                "text": _build_system_prompt(),
+                "cache_control": {"type": "ephemeral"},
+            }
+        ],
         messages=[{"role": "user", "content": user_msg}],  # type: ignore[arg-type]
     )
 

@@ -26,12 +26,15 @@ from schemas.pantry import (
     ShoppingListRead,
 )
 from schemas.recipe import (
+    GenerateFromIngredientsRequest,
+    RecipeCreateRequest,
     RecipeDraft,
     RecipeExpandedRead,
     RecipeImportConfirmRequest,
     RecipeIngredient,
     RecipeRead,
     RecipeStep,
+    RecipeUpdate,
     SaveFromPlanRequest,
     SaveFromPlanResponse,
 )
@@ -65,12 +68,15 @@ __all__ = [
     "ShoppingItemToggle",
     "ShoppingListRead",
     # recipe
+    "GenerateFromIngredientsRequest",
+    "RecipeCreateRequest",
     "RecipeDraft",
     "RecipeExpandedRead",
     "RecipeImportConfirmRequest",
     "RecipeIngredient",
     "RecipeRead",
     "RecipeStep",
+    "RecipeUpdate",
     "SaveFromPlanRequest",
     "SaveFromPlanResponse",
     # signals
