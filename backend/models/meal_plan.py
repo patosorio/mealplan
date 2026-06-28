@@ -4,7 +4,7 @@ import uuid
 from datetime import date, datetime
 from typing import Any, Optional
 
-from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Integer, Text, func
+from sqlalchemy import Boolean, Date, DateTime, Float, ForeignKey, Integer, Text, func
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -38,6 +38,7 @@ class MealPlan(Base):
         DateTime(timezone=True), nullable=True
     )
     plan_days: Mapped[int] = mapped_column(Integer, nullable=False, server_default="7")
+    quality_score: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
 
 
 class GeneratedMeal(Base):

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 """
 On-demand recipe expander — generates full ingredients and steps for a
-bookmarked meal using Claude Haiku. Single attempt, no retries.
+bookmarked meal using Claude Haiku. Retries once on parse/validation failure.
 """
 
 import json
@@ -12,10 +12,15 @@ import re
 import anthropic
 
 from core.config import settings
+from services.ai.prompts.recipe_expand import (
+    build_expand_system_prompt,
+    build_expand_user_prompt,
+)
 
 logger = logging.getLogger(__name__)
 
 _MAX_TOKENS = 2048
+_MAX_RETRIES = 1
 
 _REQUIRED_INGREDIENT_KEYS = {"name", "amount", "notes"}
 _REQUIRED_STEP_KEYS = {"step", "instruction"}
@@ -25,51 +30,6 @@ _STRIP_FENCES_RE = re.compile(r"^```(?:json)?\s*|\s*```$")
 
 def _get_client() -> anthropic.AsyncAnthropic:
     return anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
-
-
-def _build_system_prompt() -> str:
-    return (
-        "You are Nouri, an expert plant-based chef and nutritionist. "
-        "You write clear, practical recipes for home cooks. "
-        "You ALWAYS respond with ONLY valid JSON — no prose, no markdown fences."
-    )
-
-
-def _build_user_prompt(
-    name: str,
-    description: str | None,
-    tags: list[str],
-    diet_type: str | None,
-    prep_minutes: int | None,
-) -> str:
-    tags_str = ", ".join(tags) if tags else "none"
-    prep_str = f"{prep_minutes} minutes" if prep_minutes is not None else "not specified"
-    desc_str = description or "none"
-    diet_str = diet_type or "plant-based"
-
-    return (
-        f"Generate a complete plant-based recipe for: {name}\n\n"
-        f"Description: {desc_str}\n"
-        f"Diet type: {diet_str}\n"
-        f"Tags: {tags_str}\n"
-        f"Target prep time: {prep_str}\n\n"
-        'Return ONLY a JSON object with exactly these two keys:\n'
-        "{\n"
-        '  "ingredients": [\n'
-        '    {"name": "...", "amount": "...", "notes": "..."}\n'
-        "  ],\n"
-        '  "steps": [\n'
-        '    {"step": 1, "instruction": "..."}\n'
-        "  ]\n"
-        "}\n\n"
-        "Rules:\n"
-        "- All ingredients must be plant-based, no meat, no dairy, no eggs\n"
-        "- If diet_type contains \"raw\", all steps must be raw preparation only "
-        "(no cooking, no heat above 42\u00b0C)\n"
-        "- Ingredients list: 4\u201312 items, realistic quantities for 2 servings\n"
-        "- Steps: 3\u20138 clear steps, each a single action\n"
-        "- Do not include any text outside the JSON object"
-    )
 
 
 def _validate_and_extract(raw: str) -> tuple[list[dict], list[dict]]:
@@ -125,20 +85,44 @@ async def expand_recipe(
     Raises ValueError on malformed response, anthropic errors on API failure.
     """
     client = _get_client()
-    user_msg = _build_user_prompt(name, description, tags, diet_type, prep_minutes)
-
-    response = await client.messages.create(
-        model=settings.claude_haiku_model,
-        max_tokens=_MAX_TOKENS,
-        system=[
-            {
-                "type": "text",
-                "text": _build_system_prompt(),
-                "cache_control": {"type": "ephemeral"},
-            }
-        ],
-        messages=[{"role": "user", "content": user_msg}],  # type: ignore[arg-type]
+    user_msg = build_expand_user_prompt(
+        name,
+        description or "none",
+        diet_type or "plant-based",
+        tags,
+        prep_minutes or 0,
     )
+    messages: list[dict[str, str]] = [{"role": "user", "content": user_msg}]
 
-    raw: str = response.content[0].text  # type: ignore[index]
-    return _validate_and_extract(raw)
+    for attempt in range(_MAX_RETRIES + 1):
+        response = await client.messages.create(
+            model=settings.claude_haiku_model,
+            max_tokens=_MAX_TOKENS,
+            system=[
+                {
+                    "type": "text",
+                    "text": build_expand_system_prompt(),
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+            messages=messages,  # type: ignore[arg-type]
+        )
+
+        raw: str = response.content[0].text  # type: ignore[index]
+
+        try:
+            return _validate_and_extract(raw)
+        except (json.JSONDecodeError, ValueError) as exc:
+            if attempt == 0:
+                logger.warning(
+                    "recipe_expander: parse/validation failed on attempt 1: %s",
+                    str(exc)[:200],
+                )
+                error_hint = (
+                    f"\n\nPrevious response failed JSON validation: {str(exc)[:300]}. "
+                    "Return ONLY valid JSON matching the schema exactly. "
+                    "Do not change content, only fix structure."
+                )
+                messages[-1]["content"] += error_hint
+                continue
+            raise

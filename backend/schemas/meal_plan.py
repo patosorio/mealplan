@@ -210,6 +210,7 @@ class MealPlanRead(BaseModel):
     scheduled_week: Optional[date] = None
     approved_at: Optional[datetime] = None
     plan_days: int = 7
+    quality_score: Optional[float] = None
 
 
 class GeneratedMealRead(BaseModel):

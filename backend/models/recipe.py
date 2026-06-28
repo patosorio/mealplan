@@ -54,6 +54,7 @@ class UserRecipe(Base):
     embedding: Mapped[Optional[list[float]]] = mapped_column(
         Vector(768), nullable=True
     )
+    nutrition: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()

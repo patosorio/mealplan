@@ -12,9 +12,10 @@ class Settings(BaseSettings):
     )
 
     anthropic_api_key: str = ""
-    # Override via CLAUDE_MODEL env var
-    claude_model: str = "claude-sonnet-4-6"
-    claude_haiku_model: str = "claude-haiku-4-5"
+    claude_model: str = Field(default="claude-sonnet-4-6", validation_alias="CLAUDE_MODEL")
+    claude_haiku_model: str = Field(
+        default="claude-haiku-4-5", validation_alias="CLAUDE_HAIKU_MODEL"
+    )
     # Accepts GEMINI_API_KEY (canonical) or GOOGLE_API_KEY (Google AI Studio default)
     gemini_api_key: str = Field(
         default="",

@@ -372,6 +372,10 @@ async def save_from_plan(
         "tags": meal.tags or [],
         "type": meal.type,
         "prep_minutes": meal.prep_minutes,
+        "day": meal.day,
+        "meal_slot": meal.meal_type,
+        "was_swapped": meal.swapped_from_meal_id is not None,
+        "approval_status": meal.approval_status,
     })
 
     _schedule_profile_rebuild(background_tasks, user.id)

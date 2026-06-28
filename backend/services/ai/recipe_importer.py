@@ -5,71 +5,45 @@ AI-powered recipe importer.
 
 Accepts a photo, screenshot, handwritten note, URL text, ingredient list,
 or just a dish name, and returns a fully structured RecipeDraft using
-Claude Haiku. Single attempt — no retries; callers handle errors.
+Claude Haiku. Retries once on JSON parse/validation failure.
 """
 
 import json
 import logging
 
 import anthropic
+from pydantic import ValidationError
 
 from core.config import settings
 from schemas.recipe import RecipeDraft
+from services.ai.prompts.recipe_import import (
+    SYSTEM_PROMPT,
+    build_generate_from_ingredients_prompt,
+    build_import_user_prompt,
+)
 
 logger = logging.getLogger(__name__)
 _MAX_TOKENS = 3000
-
-_VALID_TAGS = (
-    "raw, cooked, high-protein, high-fiber, quick, weeknight, "
-    "meal-prep, gluten-free, nut-free, soy-free, oil-free, budget-friendly, "
-    "breakfast, lunch, dinner, snack, dessert, smoothie, salad, soup, bowl"
-)
-
-_SYSTEM_PROMPT = (
-    "You are Nouri, an expert plant-based chef. Your job is to extract "
-    "structured recipe data from any input — photos of dishes, recipe screenshots, "
-    "handwritten notes, URLs, ingredient lists, or just a dish name. "
-    "You ALWAYS respond with ONLY valid JSON. No prose, no markdown fences. "
-    "All recipes must be plant-based (no meat, no dairy, no eggs). "
-    "If the input contains non-plant-based ingredients, adapt them to "
-    "plant-based alternatives silently."
-)
-
-_INSTRUCTION = f"""VALID_TAGS = {_VALID_TAGS}
-
-Extract a complete plant-based recipe from the provided input and return \
-ONLY this JSON structure:
-{{
-  "name": "Recipe name",
-  "description": "2-3 sentence appetising description",
-  "ingredients": [
-    {{"name": "ingredient", "amount": "quantity + unit", "notes": "prep note"}}
-  ],
-  "steps": [
-    {{"step": 1, "instruction": "Clear single action"}}
-  ],
-  "tags": ["only from VALID_TAGS list above"],
-  "diet_type": "raw_vegan | vegan | plant-based",
-  "prep_minutes": 20,
-  "servings": 2,
-  "extraction_confidence": "high | medium | low",
-  "input_interpretation": "One sentence describing what you understood the input to be"
-}}
-
-Rules:
-- ingredients: 2-15 items, realistic quantities for 2 servings
-- steps: 2-10 steps
-- tags: 2-6 tags chosen ONLY from VALID_TAGS above — do not invent custom tags
-- servings: integer number of portions (default 2 if not stated)
-- If input is just a dish name with no details, set extraction_confidence="low"
-  and generate a reasonable plant-based version of that dish
-- If input is a full recipe, set extraction_confidence="high"
-- diet_type: use "raw_vegan" if all steps are raw, "vegan" otherwise,
-  "plant-based" if uncertain"""
+_MAX_RETRIES = 1
 
 
 def _get_client() -> anthropic.AsyncAnthropic:
     return anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+
+
+def _append_error_hint_to_user_message(
+    messages: list[dict],
+    error_hint: str,
+) -> None:
+    content = messages[-1]["content"]
+    if isinstance(content, str):
+        messages[-1]["content"] += error_hint
+        return
+    for block in reversed(content):
+        if block.get("type") == "text":
+            block["text"] += error_hint
+            return
+    content.append({"type": "text", "text": error_hint.lstrip()})
 
 
 async def extract_recipe_from_input(
@@ -86,12 +60,10 @@ async def extract_recipe_from_input(
     if not text and not image_base64:
         raise ValueError("Provide text, an image, or both.")
 
-    content: list[anthropic.types.MessageParam] = []
-
-    # Build content blocks: image first (if provided), then text, then instruction
+    has_image = bool(image_base64 and image_media_type)
     blocks: list[dict] = []
 
-    if image_base64 and image_media_type:
+    if has_image:
         blocks.append({
             "type": "image",
             "source": {
@@ -101,38 +73,50 @@ async def extract_recipe_from_input(
             },
         })
 
-    if text:
-        blocks.append({"type": "text", "text": text})
-
-    blocks.append({"type": "text", "text": _INSTRUCTION})
+    blocks.append({
+        "type": "text",
+        "text": build_import_user_prompt(text or "", has_image),
+    })
 
     client = _get_client()
-    response = await client.messages.create(
-        model=settings.claude_haiku_model,
-        max_tokens=_MAX_TOKENS,
-        system=[
-            {
-                "type": "text",
-                "text": _SYSTEM_PROMPT,
-                "cache_control": {"type": "ephemeral"},
-            }
-        ],
-        messages=[{"role": "user", "content": blocks}],
-    )
+    messages: list[dict] = [{"role": "user", "content": blocks}]
 
-    raw = response.content[0].text if response.content else ""
+    for attempt in range(_MAX_RETRIES + 1):
+        response = await client.messages.create(
+            model=settings.claude_haiku_model,
+            max_tokens=_MAX_TOKENS,
+            system=[
+                {
+                    "type": "text",
+                    "text": SYSTEM_PROMPT,
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+            messages=messages,  # type: ignore[arg-type]
+        )
 
-    try:
-        data = json.loads(raw)
-    except json.JSONDecodeError as exc:
-        logger.warning("recipe_importer: Claude returned invalid JSON: %r", raw[:200])
-        raise ValueError(f"Claude returned invalid JSON: {exc}") from exc
+        raw = response.content[0].text if response.content else ""
 
-    try:
-        return RecipeDraft.model_validate(data)
-    except Exception as exc:
-        logger.warning("recipe_importer: RecipeDraft validation failed: %s", exc)
-        raise ValueError(f"Extracted recipe failed validation: {exc}") from exc
+        try:
+            data = json.loads(raw)
+            return RecipeDraft.model_validate(data)
+        except (ValidationError, json.JSONDecodeError) as exc:
+            if attempt == 0:
+                logger.warning(
+                    "recipe_importer: parse/validation failed on attempt 1: %s",
+                    str(exc)[:200],
+                )
+                error_hint = (
+                    f"\n\nPrevious response failed JSON validation: {str(exc)[:300]}. "
+                    "Return ONLY valid JSON matching the schema exactly. "
+                    "Do not change content, only fix structure."
+                )
+                _append_error_hint_to_user_message(messages, error_hint)
+                continue
+            logger.warning(
+                "recipe_importer: Claude returned invalid JSON: %r", raw[:200]
+            )
+            raise ValueError(f"Claude returned invalid JSON: {exc}") from exc
 
 
 async def generate_from_ingredients(
@@ -142,24 +126,34 @@ async def generate_from_ingredients(
 ) -> RecipeDraft:
     """Generate a recipe draft from a list of on-hand ingredients."""
     client = _get_client()
-    prompt = (
-        f"Create a plant-based {target_type.replace('_', ' ')} recipe using "
-        f"these ingredients: {', '.join(ingredients)}.\n"
-        f"Target servings: {servings}.\n\n"
-        + _INSTRUCTION
-    )
-    response = await client.messages.create(
-        model=settings.claude_haiku_model,
-        max_tokens=_MAX_TOKENS,
-        system=[
-            {
-                "type": "text",
-                "text": _SYSTEM_PROMPT,
-                "cache_control": {"type": "ephemeral"},
-            }
-        ],
-        messages=[{"role": "user", "content": prompt}],
-    )
-    raw = response.content[0].text if response.content else ""
-    data = json.loads(raw)
-    return RecipeDraft.model_validate(data)
+    prompt = build_generate_from_ingredients_prompt(ingredients, target_type, servings)
+    messages: list[dict[str, str]] = [{"role": "user", "content": prompt}]
+
+    for attempt in range(_MAX_RETRIES + 1):
+        response = await client.messages.create(
+            model=settings.claude_haiku_model,
+            max_tokens=_MAX_TOKENS,
+            system=[
+                {
+                    "type": "text",
+                    "text": SYSTEM_PROMPT,
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+            messages=messages,  # type: ignore[arg-type]
+        )
+        raw = response.content[0].text if response.content else ""
+
+        try:
+            data = json.loads(raw)
+            return RecipeDraft.model_validate(data)
+        except (ValidationError, json.JSONDecodeError) as exc:
+            if attempt == 0:
+                error_hint = (
+                    f"\n\nPrevious response failed JSON validation: {str(exc)[:300]}. "
+                    "Return ONLY valid JSON matching the schema exactly. "
+                    "Do not change content, only fix structure."
+                )
+                messages[-1]["content"] += error_hint
+                continue
+            raise ValueError(f"Claude returned invalid JSON: {exc}") from exc

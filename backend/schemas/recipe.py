@@ -59,6 +59,7 @@ class RecipeRead(BaseModel):
     origin_plan_id: Optional[uuid.UUID] = None
     origin_day: Optional[str] = None
     origin_meal: Optional[str] = None
+    nutrition: Optional[dict] = None
     created_at: datetime
     updated_at: datetime
 

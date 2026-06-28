@@ -545,9 +545,12 @@ async def generate_plan(
             )
 
             if attempt < _MAX_RETRIES:
-                # Do NOT append the failed (potentially truncated) response —
-                # that would double input tokens and guarantee another failure.
-                # Just retry with the original message; increased max_tokens handles the rest.
+                error_hint = (
+                    f"\n\nPrevious response failed JSON validation: {str(exc)[:300]}. "
+                    "Return ONLY valid JSON matching the schema exactly. "
+                    "Do not change content, only fix structure."
+                )
+                messages[-1]["content"] += error_hint
                 await asyncio.sleep(1)
                 continue
 
