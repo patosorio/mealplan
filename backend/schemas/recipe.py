@@ -141,6 +141,7 @@ class SaveFromPlanRequest(BaseModel):
     day: str
     meal_type: str
     juice_index: int | None = None  # Phase 8 — set when saving a juice slot
+    recipe_id: uuid.UUID | None = None  # If set, meal came from user_recipes — no new row needed
 
 
 class SaveFromPlanResponse(BaseModel):

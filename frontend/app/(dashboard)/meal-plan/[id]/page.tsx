@@ -19,6 +19,7 @@ import {
 } from "@/lib/api/meal-plans";
 import { useRecipes } from "@/lib/api/recipes";
 import { WeeklyPlanGrid } from "@/components/meal-plan/WeeklyPlanGrid";
+import { buildGridConfigFromPlan } from "@/lib/types/grid";
 import { ReviewMealCard } from "@/components/meal-plan/ReviewMealCard";
 import { ApprovePlanModal } from "@/components/meal-plan/ApprovePlanModal";
 import { LoadingSkeleton } from "@/components/meal-plan/LoadingSkeleton";
@@ -69,21 +70,23 @@ export default function SavedPlanPage({
     void syncPlanToCalendar(uid, plan, plan.scheduled_week);
   }, [plan?.id, plan?.approved_at, plan?.plan_data, plan?.name, plan?.scheduled_week]);
 
-  async function handleBookmark(_meal: MealItem, day: DayName, slot: MealSlot) {
+  async function handleBookmark(meal: MealItem, day: DayName, slot: MealSlot) {
     const saved = await saveFromPlanMutation.mutateAsync({
-      meal_plan_id: id,
+      planId: id,
       day,
-      meal_type: slot,
+      mealType: slot,
+      recipeId: meal.recipe_id ?? null,
     });
     setSavedMealIds((prev) => new Map([...prev, [`${id}-${day}-${slot}`, saved.id]]));
   }
 
-  async function handleBookmarkJuice(day: DayName, juiceIndex: number) {
+  async function handleBookmarkJuice(day: DayName, juiceIndex: number, recipeId?: string | null) {
     await saveFromPlanMutation.mutateAsync({
-      meal_plan_id: id,
+      planId: id,
       day,
-      meal_type: "juice",
-      juice_index: juiceIndex,
+      mealType: "juice",
+      juiceIndex,
+      recipeId: recipeId ?? null,
     });
     setSavedJuiceKeys((prev) => new Set([...prev, `${id}-${day}-juice_${juiceIndex}`]));
   }
@@ -327,7 +330,9 @@ export default function SavedPlanPage({
             style={{ background: "white", border: "1px solid rgba(122,158,126,0.15)" }}
           >
             <WeeklyPlanGrid
+              gridConfig={buildGridConfigFromPlan(plan)}
               plan={plan}
+              weekStart={plan.week_start}
               onBookmark={handleBookmark}
               onBookmarkJuice={handleBookmarkJuice}
               savedMealIds={savedMealIds}

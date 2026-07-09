@@ -151,6 +151,8 @@ export function MealPlanView({
             if (!meal) return null;
             const key = `${plan.id}-${activeDay}-${slot}`;
             const savedRecipeId = savedMealIds?.get(key);
+            const isAlreadySaved =
+              !!savedRecipeId || (meal.source === "user_recipe" && !!meal.recipe_id);
             return (
               <MealCard
                 key={slot}
@@ -158,9 +160,9 @@ export function MealPlanView({
                 slot={slot}
                 day={activeDay}
                 planId={plan.id}
-                onBookmark={savedRecipeId || meal.source === "user_recipe" ? undefined : onBookmark}
-                isBookmarked={!!savedRecipeId}
-                savedRecipeId={savedRecipeId}
+                onBookmark={isAlreadySaved ? undefined : onBookmark}
+                isBookmarked={isAlreadySaved}
+                savedRecipeId={savedRecipeId ?? meal.recipe_id ?? undefined}
               />
             );
           })}

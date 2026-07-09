@@ -9,6 +9,14 @@ from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 from schemas.enums import DAY_ORDER, DietType, RawCookedRatio
 
 
+class NutritionAvg(BaseModel):
+    calories: int
+    protein_g: int
+    carbs_g: int
+    fat_g: int
+    fiber_g: int
+
+
 class MealItem(BaseModel):
     """A single meal within a generated day plan."""
 
@@ -18,9 +26,9 @@ class MealItem(BaseModel):
     tags: list[str]
     prep_minutes: int
     source: Literal["generated", "user_recipe", "corpus"] = "generated"
-    ingredients: list[str] = []
-    size_oz: int | None = None
-    size_ml: int | None = None
+    recipe_id: uuid.UUID | None = None
+    ingredients: list[Any] = []          # accepts str or dict — Claude returns both
+    nutrition: NutritionAvg | None = None
 
 
 # ── Phase 8 models ─────────────────────────────────────────────────────────────
@@ -75,14 +83,6 @@ class DayPlan(BaseModel):
     nutrition: NutritionAvg | None = None
 
 
-class NutritionAvg(BaseModel):
-    calories: int
-    protein_g: int
-    carbs_g: int
-    fat_g: int
-    fiber_g: int
-
-
 class NutritionByDay(BaseModel):
     """Optional per-day nutrition estimates (keys: monday–sunday)."""
 
@@ -102,8 +102,9 @@ _VALID_DAYS = frozenset(DAY_ORDER)
 
 class MealPlanResponse(BaseModel):
     """
-    Validated output from Claude. Every call to claude_generator.generate_plan()
-    must produce an instance of this before the result is persisted to DB.
+    Validated output from the two-phase generation pipeline. Every call to
+    orchestrator.run_two_phase_pipeline() must produce an instance of this
+    before the result is persisted to DB.
     """
 
     plan_id: uuid.UUID
@@ -134,6 +135,38 @@ class RecipeUsagePolicy(BaseModel):
     mode: Literal["balanced", "prefer_saved", "prefer_new"] = "balanced"
     flexible_repeat_slots: list[str] = []
     ingredient_coherence: bool = True
+
+
+# ── Two-phase generation (internal — never returned to client) ────────────────
+
+class DayBlueprint(BaseModel):
+    """Phase 1 one-line meal sketch per slot."""
+
+    breakfast: str = ""
+    lunch: str = ""
+    dinner: str = ""
+    juices: list[str] = []
+    extras: list[str] = []
+    protein: str = ""
+    calories_target: int = 0
+    protein_g_target: int = 0
+
+
+class PlanSkeleton(BaseModel):
+    """Phase 1 nutritional blueprint — merged into MealPlanResponse after Phase 2."""
+
+    shared_base_ingredients: list[str]
+    protein_rotation: dict[str, str]
+    daily_targets: dict[str, NutritionAvg]
+    days: dict[str, DayBlueprint]
+
+    @field_validator("days")
+    @classmethod
+    def _valid_day_keys(cls, v: dict[str, DayBlueprint]) -> dict[str, DayBlueprint]:
+        invalid = set(v.keys()) - _VALID_DAYS
+        if invalid:
+            raise ValueError(f"Invalid day names: {sorted(invalid)}")
+        return v
 
 
 class GeneratePlanRequest(BaseModel):

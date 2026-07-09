@@ -1,14 +1,15 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { apiFetch } from "@/lib/api";
+import { apiFetch, API_URL } from "@/lib/api";
 import type {
   ApprovePlanRequest,
+  DayPlan,
   GeneratePlanRequest,
   GeneratedMeal,
   MealPlan,
+  NutritionAvg,
   PatchGeneratedMealRequest,
   PatchMealPlanRequest,
   PlanStatus,
-  SaveFromPlanRequest,
   SaveFromPlanResponse,
   SchedulePlanRequest,
 } from "@/lib/types";
@@ -77,6 +78,73 @@ export function useGeneratePlan() {
   });
 }
 
+export async function generateMealPlanStream(
+  request: GeneratePlanRequest,
+  token: string,
+  onSkeleton: (days: string[]) => void,
+  onDayReady: (day: string, plan: DayPlan) => void,
+  onComplete: (planId: string, nutritionAvg: NutritionAvg) => void,
+  onError: (error: string) => void,
+  onDayFailed?: (day: string, error: string) => void,
+): Promise<void> {
+  const response = await fetch(`${API_URL}/meal-plans/generate-stream`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+      Accept: "text/event-stream",
+    },
+    body: JSON.stringify(request),
+  });
+
+  if (!response.ok) {
+    const body = await response.text();
+    throw new Error(`Generation failed: ${response.status}${body ? ` — ${body}` : ""}`);
+  }
+
+  const reader = response.body!.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() ?? "";
+
+    for (const line of lines) {
+      if (line.startsWith("event:")) continue;
+      if (!line.startsWith("data:")) continue;
+
+      const raw = line.slice(5).trim();
+      if (!raw) continue;
+
+      try {
+        const payload = JSON.parse(raw) as Record<string, unknown>;
+
+        if (payload.status === "skeleton_ready" && Array.isArray(payload.days)) {
+          onSkeleton(payload.days as string[]);
+        } else if (payload.day && payload.plan) {
+          onDayReady(payload.day as string, payload.plan as DayPlan);
+        } else if (payload.status === "complete") {
+          onComplete(
+            payload.plan_id as string,
+            payload.nutrition_avg as NutritionAvg,
+          );
+        } else if (payload.day && payload.error && !payload.plan) {
+          onDayFailed?.(payload.day as string, payload.error as string);
+        } else if (payload.error) {
+          onError(payload.error as string);
+        }
+      } catch {
+        // Incomplete chunk — continue buffering
+      }
+    }
+  }
+}
+
 export function useSavePlan() {
   const qc = useQueryClient();
   return useMutation({
@@ -134,15 +202,33 @@ export function useDeletePlan() {
 export function useSaveFromPlan() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (body: SaveFromPlanRequest) =>
+    mutationFn: ({
+      planId,
+      day,
+      mealType,
+      juiceIndex,
+      recipeId,
+    }: {
+      planId: string;
+      day: string;
+      mealType: string;
+      juiceIndex?: number;
+      recipeId?: string | null;
+    }) =>
       apiFetch<SaveFromPlanResponse>("/recipes/save-from-plan", {
         method: "POST",
-        body: JSON.stringify(body),
+        body: JSON.stringify({
+          meal_plan_id: planId,
+          day,
+          meal_type: mealType,
+          juice_index: juiceIndex ?? null,
+          recipe_id: recipeId ?? null,
+        }),
       }),
     onSuccess: (_data, variables) => {
       qc.invalidateQueries({ queryKey: mealPlanKeys.bookmarked() });
       qc.invalidateQueries({ queryKey: ["recipes"] });
-      qc.invalidateQueries({ queryKey: mealPlanKeys.meals(variables.meal_plan_id) });
+      qc.invalidateQueries({ queryKey: mealPlanKeys.meals(variables.planId) });
     },
   });
 }

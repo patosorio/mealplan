@@ -26,6 +26,7 @@ logger = logging.getLogger(__name__)
 # (path_suffix, per-hour limit)
 _RATE_LIMITS: list[tuple[str, int]] = [
     ("/meal-plans/generate", 5),
+    ("/meal-plans/generate-stream", 5),
     ("/recipes/search", 60),
 ]
 

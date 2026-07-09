@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 """
-Claude meal plan generator.
+Claude meal plan generator — two-phase planner-executor pipeline.
 
-Receives the user's saved recipes and personalisation context, then returns a
-fully validated MealPlanResponse. Supports Phase 8 extras and juicing mode.
-Retries on JSON parse failure with a corrective prompt.
+Phase 1 (Sonnet): nutritional blueprint (PlanSkeleton)
+Phase 2 (Haiku): parallel per-day enrichment into DayPlan objects
 """
 
 import asyncio
@@ -21,13 +20,49 @@ from pydantic import ValidationError
 
 from core.config import settings
 from schemas.enums import DAY_ORDER, days_for_plan
-from schemas.meal_plan import DayPlan, ExtraSlot, JuicingConfig, MealPlanResponse, RecipeUsagePolicy
+from schemas.meal_plan import (
+    DayPlan,
+    ExtraSlot,
+    JuicingConfig,
+    MealPlanResponse,
+    PlanSkeleton,
+    RecipeUsagePolicy,
+)
+from services.ai.prompts.meal_plan import (
+    build_enrich_system_prompt,
+    build_enrich_user_prompt,
+    build_skeleton_system_prompt,
+    build_skeleton_user_prompt,
+)
+from services.ai.prompts.single_day import (
+    build_single_day_system_prompt,
+    build_single_day_user_prompt,
+)
 
 logger = logging.getLogger(__name__)
 
+_CLAUDE_TIMEOUT = 175.0
+_MAX_ATTEMPTS = 3
 _MAX_TOKENS = 10000
 _MAX_RETRIES = 1
-_CLAUDE_TIMEOUT = 175.0  # per-attempt Anthropic API timeout (s)
+_TRUNCATION_HINT = (
+    "\n\nYour previous response was cut off before the JSON was complete. "
+    "Return ONLY valid, complete JSON. Keep descriptions to 2 sentences and names under 60 chars."
+)
+
+_JUICE_SIZE_LABELS: dict[int, str] = {
+    8: "8oz / 250ml",
+    16: "16oz / 500ml",
+    24: "24oz / 750ml",
+    32: "32oz / 1L",
+}
+
+def _system_block(text: str) -> list[dict[str, Any]]:
+    return [{
+        "type": "text",
+        "text": text,
+        "cache_control": {"type": "ephemeral"},
+    }]
 
 # Input sanitization constants
 _MAX_PREF_TEXT_LEN = 500
@@ -37,12 +72,10 @@ _MAX_EXCLUDE_ITEMS = 30
 _MAX_USER_RECIPES = 30
 _CONTROL_CHAR_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 
-_JUICE_SIZE_LABELS: dict[int, str] = {
-    8: "8oz / 250ml",
-    16: "16oz / 500ml",
-    24: "24oz / 750ml",
-    32: "32oz / 1L",
-}
+client = anthropic.AsyncAnthropic(
+    api_key=settings.anthropic_api_key,
+    timeout=_CLAUDE_TIMEOUT + 5,
+)
 
 
 def _sanitize(value: str, max_len: int) -> str:
@@ -71,6 +104,297 @@ def _sanitize_user_recipes(recipes: list[dict[str, Any]]) -> list[dict[str, Any]
             }
         )
     return safe
+
+
+def _extract_json(text: str) -> str:
+    """Strip markdown fences if Claude wraps in them."""
+    text = text.strip()
+    text = re.sub(r"^```(?:json)?\s*", "", text)
+    text = re.sub(r"\s*```$", "", text)
+    return text.strip()
+
+
+def _skeleton_max_tokens(plan_days: int) -> int:
+    """Scale skeleton budget with day count — 7-day plans need ~3k tokens."""
+    return min(max(3000, plan_days * 450), 8192)
+
+
+def _enrich_max_tokens() -> int:
+    return 4096
+
+
+async def _call_claude_json(
+    *,
+    model: str,
+    system_prompt: str,
+    messages: list[dict[str, str]],
+    max_tokens: int,
+    trace_id: str,
+    phase: str,
+) -> Any:
+    """Call Claude and parse JSON, retrying on truncation or parse errors."""
+    tokens = max_tokens
+
+    for attempt in range(_MAX_ATTEMPTS):
+        response = await client.messages.create(
+            model=model,
+            max_tokens=tokens,
+            system=_system_block(system_prompt),
+            messages=messages,  # type: ignore[arg-type]
+        )
+        raw = _extract_json(response.content[0].text)  # type: ignore[index]
+
+        if response.stop_reason == "max_tokens":
+            logger.warning(
+                "claude_response_truncated",
+                extra={
+                    "trace_id": trace_id,
+                    "phase": phase,
+                    "attempt": attempt + 1,
+                    "max_tokens": tokens,
+                },
+            )
+            tokens = min(tokens + 2000, 8192)
+            messages[-1]["content"] += _TRUNCATION_HINT
+            continue
+
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError as e:
+            logger.warning(
+                "claude_json_parse_failed",
+                extra={
+                    "trace_id": trace_id,
+                    "phase": phase,
+                    "attempt": attempt + 1,
+                    "error": str(e)[:200],
+                    "raw_tail": raw[-120:] if raw else "",
+                },
+            )
+            if attempt < _MAX_ATTEMPTS - 1:
+                messages[-1]["content"] += (
+                    f"\n\nPrevious response failed JSON validation: {str(e)[:300]}. "
+                    "Return ONLY valid JSON matching the schema exactly."
+                )
+                continue
+            raise
+
+    raise ValueError(
+        f"Claude failed to return complete JSON for {phase} after {_MAX_ATTEMPTS} attempts"
+    )
+
+
+async def generate_plan_skeleton(
+    plan_days: list[str],
+    context: dict[str, Any],
+    trace_id: str,
+) -> PlanSkeleton:
+    """
+    Phase 1: Sonnet generates a lightweight nutritional blueprint.
+    Fast (~2s), small output (~800 tokens), all cross-week reasoning happens here.
+    """
+    system_prompt = build_skeleton_system_prompt()
+    user_prompt = build_skeleton_user_prompt(
+        plan_days=plan_days,
+        diet_type=context["diet_type"],
+        calories_target=context["calories_target"],
+        raw_cooked_ratio=context["raw_cooked_ratio"],
+        meals_per_day=context["meals_per_day"],
+        juicing_config=context.get("juicing_config"),
+        extras=context.get("extras", []),
+        exclude_ingredients=context.get("exclude_ingredients", []),
+        preferences_text=context.get("preferences_text"),
+        pantry_items=context.get("pantry_items", []),
+        recent_meal_names=context.get("recent_meal_names", []),
+        taste_profile_summary=context.get("taste_profile_summary", ""),
+        recipe_usage_policy=context.get("recipe_usage_policy", "balanced"),
+        saved_recipes=context.get("saved_recipes", []),
+    )
+
+    messages: list[dict[str, str]] = [{"role": "user", "content": user_prompt}]
+
+    for attempt in range(_MAX_ATTEMPTS):
+        try:
+            parsed = await _call_claude_json(
+                model=settings.claude_model,
+                system_prompt=system_prompt,
+                messages=messages,
+                max_tokens=_skeleton_max_tokens(len(plan_days)),
+                trace_id=trace_id,
+                phase="skeleton",
+            )
+            skeleton = PlanSkeleton.model_validate(parsed)
+            logger.info("skeleton_generated", extra={
+                "trace_id": trace_id,
+                "days": len(skeleton.days),
+            })
+            return skeleton
+        except ValidationError as e:
+            logger.warning(
+                "skeleton_validation_failed",
+                extra={"trace_id": trace_id, "attempt": attempt + 1, "error": str(e)[:200]},
+            )
+            if attempt < _MAX_ATTEMPTS - 1:
+                messages[-1]["content"] += (
+                    f"\n\nPrevious response failed schema validation: {str(e)[:300]}. "
+                    "Return ONLY valid JSON matching the schema exactly."
+                )
+                continue
+            raise
+
+
+async def enrich_day(
+    day: str,
+    blueprint: dict[str, Any],
+    skeleton: PlanSkeleton,
+    context: dict[str, Any],
+    cached_user_context: str,
+    trace_id: str,
+) -> tuple[str, DayPlan]:
+    """
+    Phase 2: Haiku enriches a single day blueprint into a full DayPlan.
+    All day calls fire in parallel via asyncio.gather().
+    Receives cached user context for prompt caching discount on calls 2-7.
+    """
+    system_prompt = build_enrich_system_prompt()
+    daily_target = skeleton.daily_targets.get(day, {})
+
+    user_prompt = build_enrich_user_prompt(
+        day=day,
+        blueprint=blueprint,
+        shared_ingredients=skeleton.shared_base_ingredients,
+        daily_target=daily_target.model_dump() if hasattr(daily_target, "model_dump") else daily_target,
+        diet_type=context["diet_type"],
+        saved_recipes=context.get("saved_recipes", []),
+        source_instructions=context.get("source_instructions", ""),
+        preferences_text=context.get("preferences_text"),
+    )
+
+    messages = [{"role": "user", "content": cached_user_context + "\n\n" + user_prompt}]
+    tokens = _enrich_max_tokens()
+
+    for attempt in range(_MAX_ATTEMPTS):
+        raw = ""
+        try:
+            response = await client.messages.create(
+                model=settings.claude_haiku_model,
+                max_tokens=tokens,
+                system=_system_block(system_prompt),
+                messages=messages,  # type: ignore[arg-type]
+            )
+            raw = _extract_json(response.content[0].text)  # type: ignore[index]
+
+            if response.stop_reason == "max_tokens":
+                logger.warning(
+                    "claude_response_truncated",
+                    extra={
+                        "trace_id": trace_id,
+                        "phase": f"enrich_{day}",
+                        "attempt": attempt + 1,
+                        "max_tokens": tokens,
+                    },
+                )
+                tokens = min(tokens + 2000, 8192)
+                messages[-1]["content"] += _TRUNCATION_HINT
+                continue
+
+            parsed = json.loads(raw)
+            day_plan = DayPlan.model_validate(parsed)
+            logger.info("day_enriched", extra={
+                "trace_id": trace_id,
+                "day": day,
+            })
+            return day, day_plan
+        except (ValidationError, json.JSONDecodeError) as e:
+            logger.error("enrich_validation_failed", extra={
+                "trace_id": trace_id,
+                "day": day,
+                "attempt": attempt,
+                "error_type": type(e).__name__,
+                "error": str(e)[:1000],
+                "raw_response": raw[:1000] if raw else "not_captured",
+            })
+            if attempt == 0:
+                error_hint = (
+                    f"\n\nPrevious response failed JSON validation: {str(e)[:300]}. "
+                    "Return ONLY valid JSON matching the DayPlan schema exactly."
+                )
+                messages[-1]["content"] += error_hint
+                continue
+            raise
+
+
+async def generate_single_day(
+    user_recipes: list[dict[str, Any]],
+    diet_type: str,
+    calories_target: int,
+    meals_per_day: list[str],
+    exclude_ingredients: list[str],
+    preferences_text: str | None,
+    taste_profile: dict[str, Any],
+    pantry_items: list[str],
+    recent_meal_names: list[str],
+    day: str,
+    extras: list[ExtraSlot] | None = None,
+    juicing_config: JuicingConfig | None = None,
+) -> DayPlan:
+    """
+    Generate meals for a single day using Claude Haiku.
+    Returns a validated DayPlan — no full MealPlanResponse wrapper.
+    """
+    if day not in DAY_ORDER:
+        raise ValueError(f"Invalid day '{day}'.")
+
+    safe_recipes = _sanitize_user_recipes(user_recipes)
+    safe_prefs = (
+        _sanitize(preferences_text, _MAX_PREF_TEXT_LEN) if preferences_text else None
+    )
+    safe_exclude = [
+        _sanitize(i, _MAX_INGREDIENT_LEN) for i in exclude_ingredients[:_MAX_EXCLUDE_ITEMS]
+    ]
+    safe_pantry = [_sanitize(i, _MAX_INGREDIENT_LEN) for i in pantry_items[:30]]
+    safe_recent = [_sanitize(n, 200) for n in recent_meal_names[:20]]
+
+    system_prompt = build_single_day_system_prompt()
+    user_prompt = build_single_day_user_prompt(
+        day=day,
+        diet_type=diet_type,
+        calories_target=calories_target,
+        meals_per_day=meals_per_day,
+        exclude_ingredients=safe_exclude,
+        preferences_text=safe_prefs,
+        taste_profile=taste_profile,
+        pantry_items=safe_pantry,
+        recent_meal_names=safe_recent,
+        user_recipes=safe_recipes,
+        extras=extras,
+        juicing_config=juicing_config,
+    )
+
+    messages: list[dict[str, str]] = [{"role": "user", "content": user_prompt}]
+
+    for attempt in range(_MAX_ATTEMPTS):
+        try:
+            parsed = await _call_claude_json(
+                model=settings.claude_haiku_model,
+                system_prompt=system_prompt,
+                messages=messages,
+                max_tokens=_enrich_max_tokens(),
+                trace_id=f"single_day_{day}",
+                phase=f"single_day_{day}",
+            )
+            return DayPlan.model_validate(parsed)
+        except ValidationError as e:
+            if attempt < _MAX_ATTEMPTS - 1:
+                messages[-1]["content"] += (
+                    f"\n\nPrevious response failed schema validation: {str(e)[:300]}. "
+                    "Return ONLY valid JSON matching the DayPlan schema exactly."
+                )
+                continue
+            raise
+
+
+# ── Single-phase Sonnet generation (active path via orchestrator.run_pipeline) ──
 
 
 def _build_system_prompt() -> str:
@@ -178,56 +502,6 @@ def _build_json_schema(
         "days": {first_day: day_example},
     }
     return schema
-
-
-def _build_single_day_schema(
-    diet_type: str,
-    extras: list[ExtraSlot],
-    juicing_config: JuicingConfig | None,
-    day: str,
-) -> dict[str, Any]:
-    """JSON example for single-day generation (returns DayPlan shape only)."""
-    meal_type_hint = "raw" if "raw_vegan" in diet_type else "raw|cooked"
-    day_example: dict[str, Any] = {
-        "breakfast": {
-            "name": "...",
-            "type": meal_type_hint,
-            "description": "...",
-            "tags": ["..."],
-            "prep_minutes": 15,
-            "source": "generated",
-            "ingredients": ["ingredient 1", "ingredient 2"],
-        },
-        "lunch": {"...": "same structure"},
-        "dinner": {"...": "same structure"},
-        "juices": [],
-        "extras": [],
-        "snacks": [],
-        "nutrition": {
-            "calories": 1800,
-            "protein_g": 60,
-            "carbs_g": 200,
-            "fat_g": 70,
-            "fiber_g": 35,
-        },
-    }
-    if juicing_config:
-        day_example["juices"] = [
-            {
-                "name": f"{j.label} Juice — [creative name here]",
-                "type": "juice",
-                "description": "...",
-                "tags": ["juice", "raw", j.label.lower().replace("-", "_").replace(" ", "_")],
-                "prep_minutes": 10,
-                "source": "generated",
-                "size_oz": j.size_oz,
-            }
-            for j in juicing_config.juices
-        ]
-        for slot in ("breakfast", "lunch", "dinner"):
-            if slot not in juicing_config.solid_meals:
-                day_example[slot] = None
-    return day_example
 
 
 _RATIO_LABELS: dict[str, str] = {
@@ -419,14 +693,6 @@ def _build_user_prompt(
     return "\n\n".join(parts)
 
 
-def _extract_json(text: str) -> str:
-    """Strip markdown fences if Claude wraps in them."""
-    text = text.strip()
-    text = re.sub(r"^```(?:json)?\s*", "", text)
-    text = re.sub(r"\s*```$", "", text)
-    return text.strip()
-
-
 def _get_client() -> anthropic.AsyncAnthropic:
     return anthropic.AsyncAnthropic(
         api_key=settings.anthropic_api_key,
@@ -558,79 +824,3 @@ async def generate_plan(
         f"Claude failed to produce valid JSON after {_MAX_RETRIES + 1} attempts. "
         f"Last error: {last_error[:500]}"
     )
-
-
-async def generate_single_day(
-    user_recipes: list[dict[str, Any]],
-    diet_type: str,
-    calories_target: int,
-    meals_per_day: list[str],
-    exclude_ingredients: list[str],
-    preferences_text: str | None,
-    taste_profile: dict[str, Any],
-    pantry_items: list[str],
-    recent_meal_names: list[str],
-    day: str,
-    extras: list[ExtraSlot] | None = None,
-    juicing_config: JuicingConfig | None = None,
-) -> DayPlan:
-    """
-    Generate meals for a single day using Claude Haiku.
-    Returns a validated DayPlan — no full MealPlanResponse wrapper.
-    """
-    if day not in DAY_ORDER:
-        raise ValueError(f"Invalid day '{day}'.")
-
-    safe_recipes = _sanitize_user_recipes(user_recipes)
-    safe_prefs = (
-        _sanitize(preferences_text, _MAX_PREF_TEXT_LEN) if preferences_text else None
-    )
-    safe_exclude = [
-        _sanitize(i, _MAX_INGREDIENT_LEN) for i in exclude_ingredients[:_MAX_EXCLUDE_ITEMS]
-    ]
-    safe_pantry = [_sanitize(i, _MAX_INGREDIENT_LEN) for i in pantry_items[:30]]
-    safe_recent = [_sanitize(n, 200) for n in recent_meal_names[:20]]
-
-    day_schema = _build_single_day_schema(
-        diet_type, extras or [], juicing_config, day
-    )
-
-    parts: list[str] = [
-        f"Generate meals for {day} only. Diet: {diet_type}. "
-        f"Daily calorie target: {calories_target} kcal.\n"
-        f"Include these meal types: {', '.join(meals_per_day)}."
-    ]
-    if safe_exclude:
-        parts.append(f"NEVER use these ingredients: {', '.join(safe_exclude)}.")
-    if safe_prefs:
-        parts.append(f"User notes: {safe_prefs}")
-    if safe_pantry:
-        parts.append(f"Prioritise pantry items: {', '.join(safe_pantry)}.")
-    if safe_recent:
-        parts.append(f"Do NOT repeat: {', '.join(safe_recent)}.")
-    if taste_profile.get("favourite_tags"):
-        parts.append(
-            f"User loves: {', '.join(taste_profile['favourite_tags'][:10])}."
-        )
-    if safe_recipes:
-        parts.append(
-            f"Saved recipes:\n{json.dumps(safe_recipes[:10], indent=2)}"
-        )
-
-    parts.append(
-        "Return ONLY a JSON object matching this DayPlan schema:\n"
-        + json.dumps(day_schema, indent=2)
-        + "\nInclude ingredients arrays on every meal/juice/extra. "
-        "Include a nutrition object with estimated daily totals for the day."
-    )
-
-    client = _get_client()
-    response = await client.messages.create(
-        model=settings.claude_haiku_model,
-        max_tokens=4096,
-        system=_system_message(),
-        messages=[{"role": "user", "content": "\n\n".join(parts)}],
-    )
-    raw: str = response.content[0].text  # type: ignore[index]
-    cleaned = _extract_json(raw)
-    return DayPlan.model_validate_json(cleaned)

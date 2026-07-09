@@ -3,6 +3,8 @@ import type { RecipeExpanded } from "./types";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
+export { API_URL };
+
 export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const user = auth.currentUser;
   if (!user) throw new Error("Not authenticated");

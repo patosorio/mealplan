@@ -203,6 +203,11 @@ async def save_from_plan(
     Supports Phase 8 juice slots via juice_index (stored as origin_meal="juice_N").
     Triggers taste profile rebuild as a background task.
     """
+    if body.recipe_id:
+        existing = await db.get(UserRecipe, body.recipe_id)
+        if existing and existing.user_id == user.id:
+            return existing
+
     # Canonical meal type key (e.g. "breakfast" or "juice_0")
     origin_meal_key = (
         f"juice_{body.juice_index}"

@@ -32,7 +32,9 @@ export interface MealItem {
   tags: string[];
   prep_minutes: number;
   source: "generated" | "user_recipe" | "corpus";
+  recipe_id?: string | null;
   ingredients?: string[];
+  nutrition?: NutritionAvg;
   size_oz?: number | null;
   size_ml?: number | null;
 }
@@ -146,6 +148,7 @@ export interface SaveFromPlanRequest {
   day: string;
   meal_type: string;
   juice_index?: number;
+  recipe_id?: string | null;
 }
 
 export interface SaveFromPlanResponse {

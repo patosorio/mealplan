@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from typing import Annotated
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
+from sse_starlette.sse import EventSourceResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -22,6 +23,7 @@ from schemas import (
 )
 from services.meal_plan_service import (
     generate_and_persist,
+    generate_plan_stream_events,
     regenerate_day,
     swap_meal,
     sync_generated_meals_from_plan,
@@ -44,6 +46,24 @@ async def generate_meal_plan(
     Call POST /{id}/save to flatten meals into individual queryable rows.
     """
     return await generate_and_persist(request=body, user_id=user.id, db=db)
+
+
+@router.post("/generate-stream")
+async def generate_meal_plan_stream(
+    body: GeneratePlanRequest,
+    user: User = Depends(get_current_db_user),
+    db: AsyncSession = Depends(get_db),
+) -> EventSourceResponse:
+    """
+    Stream meal plan generation via SSE — emits each day as Phase 2 completes.
+    The synchronous POST /generate endpoint remains unchanged.
+    """
+
+    async def sse_generator():
+        async for event in generate_plan_stream_events(body, user.id, db):
+            yield event
+
+    return EventSourceResponse(sse_generator())
 
 
 @router.get("", response_model=list[MealPlanRead])

@@ -38,7 +38,7 @@ export function MealCard({
   }, [isBookmarked]);
 
   async function handleBookmark() {
-    if (bookmarked || !onBookmark) return;
+    if (isAlreadySaved || !onBookmark) return;
     setBookmarking(true);
     try {
       await onBookmark(meal, day, slot);
@@ -55,6 +55,9 @@ export function MealCard({
     }
   }
 
+  const isAlreadySaved =
+    bookmarked || (meal.source === "user_recipe" && !!meal.recipe_id);
+  const linkedRecipeId = savedRecipeId ?? meal.recipe_id ?? undefined;
   const isRaw = meal.type === "raw";
 
   return (
@@ -78,7 +81,14 @@ export function MealCard({
         </div>
 
         {/* Bookmark button — hidden for user_recipe meals (already in their collection) */}
-        {bookmarked || meal.source === "user_recipe" ? null : onBookmark ? (
+        {isAlreadySaved && meal.source === "user_recipe" && meal.recipe_id ? (
+          <span
+            className="font-display text-[9px] px-1.5 py-0.5 rounded"
+            style={{ background: "rgba(45,74,53,0.1)", color: "var(--deep-green)" }}
+          >
+            ★ your recipe
+          </span>
+        ) : isAlreadySaved ? null : onBookmark ? (
           <button
             onClick={handleBookmark}
             disabled={bookmarking}
@@ -112,9 +122,9 @@ export function MealCard({
       </p>
 
       {/* View recipe link — appears once saved */}
-      {savedRecipeId && (
+      {linkedRecipeId && (
         <Link
-          href={`/recipes/${savedRecipeId}`}
+          href={`/recipes/${linkedRecipeId}`}
           className="inline-flex items-center gap-1 font-mono text-[10px] uppercase tracking-[0.12em] transition-opacity hover:opacity-70"
           style={{ color: "var(--sage)" }}
         >

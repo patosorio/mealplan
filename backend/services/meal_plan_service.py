@@ -6,16 +6,27 @@ Keeps all DB operations and orchestrator calls out of the router layer.
 """
 
 import uuid
+from collections.abc import AsyncIterator
 from datetime import date
 from typing import Any
+
+import asyncio
+import json
 
 from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from models import GeneratedMeal, MealPlan, UserPreferences
-from schemas.meal_plan import GeneratePlanRequest, MealPlanResponse
-from services.ai.orchestrator import run_pipeline, run_single_day_pipeline
+from schemas.meal_plan import DayPlan, GeneratePlanRequest, MealPlanResponse, NutritionAvg
+from services.ai.claude_generator import enrich_day, generate_plan_skeleton
+from services.ai.orchestrator import (
+    build_cached_user_context,
+    load_generation_context,
+    run_pipeline,
+    run_single_day_pipeline,
+    sum_weekly_nutrition,
+)
 from services.signal_service import log_signal
 
 
@@ -56,28 +67,51 @@ async def generate_and_persist(
             detail=f"Meal plan generation failed: {exc}",
         ) from exc
 
-    # Flatten each DayPlan into JSON-serialisable dicts
-    days_data: dict[str, Any] = {}
-    for day, day_plan in plan_response.days.items():
-        day_entry: dict[str, Any] = {
-            "breakfast": day_plan.breakfast.model_dump() if day_plan.breakfast else None,
-            "lunch": day_plan.lunch.model_dump() if day_plan.lunch else None,
-            "dinner": day_plan.dinner.model_dump() if day_plan.dinner else None,
-            "juices": [j.model_dump() for j in day_plan.juices],
-            "extras": [e.model_dump() for e in day_plan.extras],
-            "snacks": day_plan.snacks,
-        }
-        if day_plan.nutrition:
-            day_entry["nutrition"] = day_plan.nutrition.model_dump()
-        days_data[day] = day_entry
-
-    nutrition_by_day: dict[str, Any] = {
-        day: nutrition.model_dump()
-        for day, nutrition in plan_response.nutrition_by_day.items()
-    }
+    nutrition_by_day: dict[str, NutritionAvg] = dict(plan_response.nutrition_by_day)
     for day, day_plan in plan_response.days.items():
         if day_plan.nutrition and day not in nutrition_by_day:
-            nutrition_by_day[day] = day_plan.nutrition.model_dump()
+            nutrition_by_day[day] = day_plan.nutrition
+
+    return await persist_meal_plan(
+        db=db,
+        user_id=user_id,
+        plan_id=plan_id,
+        request=request,
+        days=plan_response.days,
+        nutrition_avg=plan_response.nutrition_avg,
+        nutrition_by_day=nutrition_by_day,
+    )
+
+
+def _day_plan_to_dict(day_plan: DayPlan) -> dict[str, Any]:
+    day_entry: dict[str, Any] = {
+        "breakfast": day_plan.breakfast.model_dump(mode="json") if day_plan.breakfast else None,
+        "lunch": day_plan.lunch.model_dump(mode="json") if day_plan.lunch else None,
+        "dinner": day_plan.dinner.model_dump(mode="json") if day_plan.dinner else None,
+        "juices": [j.model_dump(mode="json") for j in day_plan.juices],
+        "extras": [e.model_dump(mode="json") for e in day_plan.extras],
+        "snacks": day_plan.snacks,
+    }
+    if day_plan.nutrition:
+        day_entry["nutrition"] = day_plan.nutrition.model_dump(mode="json")
+    return day_entry
+
+
+async def persist_meal_plan(
+    db: AsyncSession,
+    user_id: uuid.UUID,
+    plan_id: uuid.UUID,
+    request: GeneratePlanRequest,
+    days: dict[str, DayPlan],
+    nutrition_avg: NutritionAvg,
+    nutrition_by_day: dict[str, NutritionAvg],
+) -> MealPlan:
+    """Persist a completed plan to the database."""
+    days_data = {day: _day_plan_to_dict(day_plan) for day, day_plan in days.items()}
+    nutrition_by_day_data = {
+        day: nutrition.model_dump(mode="json")
+        for day, nutrition in nutrition_by_day.items()
+    }
 
     meal_plan = MealPlan(
         id=plan_id,
@@ -86,9 +120,9 @@ async def generate_and_persist(
         diet_type=request.diet_type,
         plan_data={
             "days": days_data,
-            "nutrition_by_day": nutrition_by_day,
+            "nutrition_by_day": nutrition_by_day_data,
         },
-        nutrition_avg=plan_response.nutrition_avg.model_dump(),
+        nutrition_avg=nutrition_avg.model_dump(mode="json"),
         plan_days=request.plan_days,
     )
     db.add(meal_plan)
@@ -107,6 +141,101 @@ async def generate_and_persist(
     )
 
     return meal_plan
+
+
+async def generate_plan_stream_events(
+    request: GeneratePlanRequest,
+    user_id: uuid.UUID,
+    db: AsyncSession,
+) -> AsyncIterator[dict[str, str]]:
+    """Yield SSE event dicts as each pipeline phase completes."""
+    trace_id = str(uuid.uuid4())
+    plan_id = uuid.uuid4()
+
+    try:
+        plan_days, context = await load_generation_context(db, user_id, request)
+
+        skeleton = await generate_plan_skeleton(
+            plan_days=plan_days,
+            context=context,
+            trace_id=trace_id,
+        )
+        yield {
+            "event": "skeleton_ready",
+            "data": json.dumps({"status": "skeleton_ready", "days": plan_days}),
+        }
+
+        cached_ctx = build_cached_user_context(context)
+
+        async def _enrich_tagged(day: str) -> tuple[str, DayPlan | None, str | None]:
+            try:
+                result_day, day_plan = await enrich_day(
+                    day=day,
+                    blueprint=skeleton.days[day].model_dump(),
+                    skeleton=skeleton,
+                    context=context,
+                    cached_user_context=cached_ctx,
+                    trace_id=trace_id,
+                )
+                return result_day, day_plan, None
+            except Exception as exc:
+                return day, None, str(exc)[:200]
+
+        enrich_coros = [
+            _enrich_tagged(day)
+            for day in plan_days
+            if day in skeleton.days
+        ]
+
+        completed_days: dict[str, DayPlan] = {}
+        async for finished in asyncio.as_completed(enrich_coros):
+            day, day_plan, err = await finished
+            if err or day_plan is None:
+                yield {
+                    "event": "day_failed",
+                    "data": json.dumps({"day": day, "error": err or "Unknown error"}),
+                }
+                continue
+
+            completed_days[day] = day_plan
+            yield {
+                "event": "day_ready",
+                "data": json.dumps({
+                    "day": day,
+                    "plan": day_plan.model_dump(mode="json"),
+                }),
+            }
+
+        nutrition_by_day: dict[str, NutritionAvg] = dict(skeleton.daily_targets)
+        for day, day_plan in completed_days.items():
+            if day_plan.nutrition:
+                nutrition_by_day[day] = day_plan.nutrition
+
+        nutrition_avg = sum_weekly_nutrition(completed_days)
+        await persist_meal_plan(
+            db=db,
+            user_id=user_id,
+            plan_id=plan_id,
+            request=request,
+            days=completed_days,
+            nutrition_avg=nutrition_avg,
+            nutrition_by_day=nutrition_by_day,
+        )
+
+        yield {
+            "event": "complete",
+            "data": json.dumps({
+                "plan_id": str(plan_id),
+                "week_start": str(request.week_start),
+                "nutrition_avg": nutrition_avg.model_dump(mode="json"),
+                "status": "complete",
+            }),
+        }
+    except Exception as exc:
+        yield {
+            "event": "error",
+            "data": json.dumps({"error": str(exc)[:500]}),
+        }
 
 
 async def regenerate_day(

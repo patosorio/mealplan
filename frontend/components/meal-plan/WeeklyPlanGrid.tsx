@@ -2,31 +2,19 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { activeDaysFromPlan, juiceSlotKey, mealSlotKey } from "@/lib/meal-plan-utils";
+import { juiceSlotKey, mealSlotKey } from "@/lib/meal-plan-utils";
 import { getDayNutrition, sumWeeklyNutrition } from "@/lib/nutrition-utils";
-import type { DayName, ExtraItem, MealItem, MealPlan, MealSlot, NutritionAvg } from "@/lib/types";
+import type { DayName, DayPlan, ExtraItem, MealItem, MealPlan, MealSlot, NutritionAvg } from "@/lib/types";
+import type { GridConfig, GridRow } from "@/lib/types/grid";
 
-interface WeeklyPlanGridProps {
-  plan: MealPlan;
-  onBookmark?: (meal: MealItem, day: DayName, slot: MealSlot) => Promise<void>;
-  onBookmarkJuice?: (day: DayName, juiceIndex: number) => Promise<void>;
-  onRegenerate?: (day: DayName) => Promise<void>;
-  onSavePlan?: () => Promise<void>;
-  isRegenerating?: boolean;
-  isSaving?: boolean;
-  savedMealIds?: Map<string, string>;
-  savedJuiceKeys?: Set<string>;
-  revealedDayCount?: number;
-}
-
-const DAY_SHORT: Record<DayName, string> = {
-  monday: "Mon",
-  tuesday: "Tue",
-  wednesday: "Wed",
-  thursday: "Thu",
-  friday: "Fri",
-  saturday: "Sat",
-  sunday: "Sun",
+const DAY_LABELS: Record<string, string> = {
+  monday: "MON",
+  tuesday: "TUE",
+  wednesday: "WED",
+  thursday: "THU",
+  friday: "FRI",
+  saturday: "SAT",
+  sunday: "SUN",
 };
 
 const EXTRA_SLOT_LABELS: Record<string, string> = {
@@ -38,8 +26,27 @@ const EXTRA_SLOT_LABELS: Record<string, string> = {
 
 type CellKey = { day: DayName; slotType: "meal" | "juice" | "extra"; slot: string; index?: number };
 
+interface WeeklyPlanGridProps {
+  gridConfig: GridConfig
+  plan: MealPlan | null
+  weekStart: string
+  isGenerating?: boolean
+  onBookmark?: (meal: MealItem, day: DayName, slot: MealSlot) => Promise<void>
+  onBookmarkJuice?: (day: DayName, juiceIndex: number, recipeId?: string | null) => Promise<void>
+  onRegenerate?: (day: DayName) => Promise<void>
+  onSavePlan?: () => Promise<void>
+  isRegenerating?: boolean
+  isSaving?: boolean
+  savedMealIds?: Map<string, string>
+  savedJuiceKeys?: Set<string>
+  revealedDayCount?: number
+}
+
 export function WeeklyPlanGrid({
+  gridConfig,
   plan,
+  weekStart,
+  isGenerating = false,
   onBookmark,
   onBookmarkJuice,
   onRegenerate,
@@ -53,12 +60,21 @@ export function WeeklyPlanGrid({
   const [selected, setSelected] = useState<CellKey | null>(null);
   const [bookmarkingKey, setBookmarkingKey] = useState<string | null>(null);
 
-  const days = plan.plan_data.days;
-  const activeDays = activeDaysFromPlan(plan);
-  const weeklyTotals = sumWeeklyNutrition(plan);
-  const revealCount = revealedDayCount ?? activeDays.length;
+  const { days, rows } = gridConfig;
+
+  const weeklyTotals = plan ? sumWeeklyNutrition(plan) : null;
+  const weekLabel = (weekStart || plan?.week_start)
+    ? new Date((weekStart || plan!.week_start) + "T00:00:00").toLocaleDateString("en-GB", {
+        day: "numeric",
+        month: "long",
+        year: "numeric",
+      })
+    : null;
+
+  const revealCount = isGenerating ? days.length : (revealedDayCount ?? days.length);
 
   function isSlotSaved(day: DayName, slotType: "meal" | "juice" | "extra", slot: string, index?: number): boolean {
+    if (!plan) return false;
     if (slotType === "juice" && index != null) {
       return savedJuiceKeys?.has(juiceSlotKey(plan.id, day, index)) ?? false;
     }
@@ -68,31 +84,14 @@ export function WeeklyPlanGrid({
     return false;
   }
 
-  // Determine row structure
-  const solidSlots = (["breakfast", "lunch", "dinner"] as MealSlot[]).filter((slot) =>
-    activeDays.some((d) => days[d]?.[slot] != null)
-  );
-  const maxJuices = Math.max(0, ...activeDays.map((d) => (days[d]?.juices ?? []).length));
-  const extraSlots = [
-    ...new Set(
-      activeDays.flatMap((d) => (days[d]?.extras ?? []).map((e: ExtraItem) => e.slot))
-    ),
-  ];
-
-  // Chronologically-ordered rows
-  const rows = buildRows(days as Record<string, DayPlan>, activeDays, solidSlots, maxJuices, extraSlots);
-
-  const weekLabel = new Date(plan.week_start + "T00:00:00").toLocaleDateString("en-GB", {
-    day: "numeric",
-    month: "long",
-    year: "numeric",
-  });
-
-  // Detail panel state — dismiss if selected day is not yet revealed
-  const selDayIdx = selected?.day ? activeDays.indexOf(selected.day) : -1;
+  // Detail panel state
+  const selDayIdx = selected?.day ? days.indexOf(selected.day as DayName) : -1;
   const selDayRevealed = selDayIdx >= 0 && selDayIdx < revealCount;
   const selDay = selDayRevealed ? selected?.day : null;
-  const selDayPlan = selDay ? days[selDay] : null;
+  const selDayPlan = selDay
+    ? (plan?.plan_data?.days?.[selDay as DayName] ?? null)
+    : null;
+
   let detailMeal: MealItem | null = null;
   let detailExtra: ExtraItem | null = null;
 
@@ -102,9 +101,7 @@ export function WeeklyPlanGrid({
     } else if (selected.slotType === "juice" && selected.index != null) {
       detailMeal = selDayPlan.juices?.[selected.index] ?? null;
     } else if (selected.slotType === "extra") {
-      detailExtra = (selDayPlan.extras ?? []).find(
-        (e: ExtraItem) => e.slot === selected.slot
-      ) ?? null;
+      detailExtra = (selDayPlan.extras ?? []).find((e: ExtraItem) => e.slot === selected.slot) ?? null;
     }
   }
 
@@ -114,9 +111,9 @@ export function WeeklyPlanGrid({
     setBookmarkingKey(bKey);
     try {
       if (selected.slotType === "juice" && selected.index != null && onBookmarkJuice) {
-        await onBookmarkJuice(selDay, selected.index);
+        await onBookmarkJuice(selDay as DayName, selected.index, detailMeal?.recipe_id);
       } else if (selected.slotType === "meal" && detailMeal && onBookmark) {
-        await onBookmark(detailMeal, selDay, selected.slot as MealSlot);
+        await onBookmark(detailMeal, selDay as DayName, selected.slot as MealSlot);
       }
     } catch {
       // 409 = already saved — OK
@@ -126,120 +123,141 @@ export function WeeklyPlanGrid({
   }
 
   const isMealSaved =
-    (selected && selDay
+    selected && selDay
       ? isSlotSaved(
-          selDay,
+          selDay as DayName,
           selected.slotType === "juice" ? "juice" : selected.slotType === "meal" ? "meal" : "extra",
           selected.slot,
-          selected.index
-        )
-      : false) || detailMeal?.source === "user_recipe";
+          selected.index,
+        ) || (detailMeal?.source === "user_recipe" && !!detailMeal?.recipe_id)
+      : false;
+
   const savedRecipeId =
-    selected?.slotType === "meal" && selDay
-      ? savedMealIds?.get(mealSlotKey(plan.id, selDay, selected.slot))
-      : undefined;
+    detailMeal?.recipe_id ??
+    (selected?.slotType === "meal" && selDay && plan
+      ? savedMealIds?.get(mealSlotKey(plan.id, selDay as DayName, selected.slot))
+      : undefined);
+
+  const isEmpty = !plan && !isGenerating;
 
   return (
     <div className="space-y-4">
-      {/* Interactive header — hidden when printing */}
-      <div className="no-print flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-        <div className="min-w-0">
-          <p className="font-mono text-[10px] uppercase tracking-[0.2em]" style={{ color: "var(--sage)" }}>
-            Week of {weekLabel}
-          </p>
-          <p className="font-display text-[0.8rem] font-light italic mt-0.5" style={{ color: "var(--text-muted)" }}>
-            Click any meal for details
-          </p>
-        </div>
-        <div className="flex flex-col gap-2 w-full sm:w-auto sm:items-end">
-          {weeklyTotals && (
-            <div className="overflow-x-auto max-w-full -mx-1 px-1">
-              <div className="flex items-center gap-2 flex-nowrap min-w-max pb-0.5">
-                {[
-                  { label: "Cal", value: weeklyTotals.calories },
-                  { label: "Protein", value: `${weeklyTotals.protein_g}g` },
-                  { label: "Carbs", value: `${weeklyTotals.carbs_g}g` },
-                  { label: "Fat", value: `${weeklyTotals.fat_g}g` },
-                  { label: "Fibre", value: `${weeklyTotals.fiber_g}g` },
-                ].map(({ label, value }) => (
-                  <span
-                    key={label}
-                    className="font-mono text-[10px] uppercase tracking-[0.1em] px-2.5 py-1 rounded-full whitespace-nowrap"
-                    style={{ background: "rgba(122,158,126,0.1)", color: "var(--sage)" }}
-                  >
-                    {label} {value}
-                  </span>
-                ))}
+      {/* Header — only shown once a plan exists */}
+      {plan && (
+        <div className="no-print flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div className="min-w-0">
+            {weekLabel && (
+              <p className="font-mono text-[10px] uppercase tracking-[0.2em]" style={{ color: "var(--sage)" }}>
+                Week of {weekLabel}
+              </p>
+            )}
+            <p className="font-display text-[0.8rem] font-light italic mt-0.5" style={{ color: "var(--text-muted)" }}>
+              Click any meal for details
+            </p>
+          </div>
+          <div className="flex flex-col gap-2 w-full sm:w-auto sm:items-end">
+            {weeklyTotals && (
+              <div className="overflow-x-auto max-w-full -mx-1 px-1">
+                <div className="flex items-center gap-2 flex-nowrap min-w-max pb-0.5">
+                  {[
+                    { label: "Cal", value: weeklyTotals.calories },
+                    { label: "Protein", value: `${weeklyTotals.protein_g}g` },
+                    { label: "Carbs", value: `${weeklyTotals.carbs_g}g` },
+                    { label: "Fat", value: `${weeklyTotals.fat_g}g` },
+                    { label: "Fibre", value: `${weeklyTotals.fiber_g}g` },
+                  ].map(({ label, value }) => (
+                    <span
+                      key={label}
+                      className="font-mono text-[10px] uppercase tracking-[0.1em] px-2.5 py-1 rounded-full whitespace-nowrap"
+                      style={{ background: "rgba(122,158,126,0.1)", color: "var(--sage)" }}
+                    >
+                      {label} {value}
+                    </span>
+                  ))}
+                </div>
               </div>
+            )}
+            <div className="flex items-center gap-2 flex-wrap">
+              {onSavePlan && (
+                <button
+                  onClick={onSavePlan}
+                  disabled={isSaving}
+                  className="font-mono text-[10px] uppercase tracking-[0.15em] px-3 py-2 rounded-lg transition-colors disabled:opacity-50"
+                  style={{ border: "1px solid rgba(45,74,53,0.35)", color: "var(--deep-green)" }}
+                >
+                  {isSaving ? "Saving…" : "Save Plan"}
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => window.print()}
+                className="font-mono text-[10px] uppercase tracking-[0.15em] px-3 py-2 rounded-lg transition-colors"
+                style={{ border: "1px solid rgba(122,158,126,0.35)", color: "var(--sage)" }}
+              >
+                Print / PDF
+              </button>
             </div>
-          )}
-          <div className="flex items-center gap-2 flex-wrap">
-          {onSavePlan && (
-            <button
-              onClick={onSavePlan}
-              disabled={isSaving}
-              className="font-mono text-[10px] uppercase tracking-[0.15em] px-3 py-2 rounded-lg transition-colors disabled:opacity-50"
-              style={{ border: "1px solid rgba(45,74,53,0.35)", color: "var(--deep-green)" }}
-            >
-              {isSaving ? "Saving…" : "Save Plan"}
-            </button>
-          )}
-          <button
-            type="button"
-            onClick={() => window.print()}
-            className="font-mono text-[10px] uppercase tracking-[0.15em] px-3 py-2 rounded-lg transition-colors"
-            style={{ border: "1px solid rgba(122,158,126,0.35)", color: "var(--sage)" }}
-          >
-            Print / PDF
-          </button>
           </div>
         </div>
-      </div>
+      )}
+
+      {/* Empty state hint */}
+      {isEmpty && (
+        <div className="flex flex-col items-center justify-center py-8 gap-2">
+          <span style={{ color: "var(--raw-accent)", opacity: 0.4, fontSize: "1.5rem" }}>✦</span>
+          <p
+            className="font-display italic text-center max-w-xs"
+            style={{ color: "var(--text-muted)", fontSize: "0.9rem" }}
+          >
+            Configure your plan in the sidebar, then generate.
+          </p>
+        </div>
+      )}
 
       {/* Grid + detail panel */}
       <div className="flex flex-col xl:flex-row gap-4 items-start">
-        {/* Printable weekly grid only */}
+        {/* Printable weekly grid */}
         <div id="meal-plan-print" className="meal-plan-print flex-1 min-w-0 w-full">
-          <div className="meal-plan-print-header">
-            <p
-              className="font-display text-[1.1rem] font-light"
-              style={{ color: "var(--deep-green)" }}
-            >
-              Nouri
-              {plan.name ? ` · ${plan.name}` : ""}
-            </p>
-            <p className="font-mono text-[10px] uppercase tracking-[0.15em] mt-1" style={{ color: "var(--sage)" }}>
-              Week of {weekLabel}
-              {weeklyTotals && (
-                <span style={{ color: "var(--text-muted)" }}>
-                  {" "}
-                  · {weeklyTotals.calories} kcal total · {weeklyTotals.protein_g}g protein ·{" "}
-                  {weeklyTotals.fiber_g}g fibre
-                </span>
+          {/* Print header */}
+          {plan && (
+            <div className="meal-plan-print-header">
+              <p className="font-display text-[1.1rem] font-light" style={{ color: "var(--deep-green)" }}>
+                Nouri{plan.name ? ` · ${plan.name}` : ""}
+              </p>
+              {weekLabel && (
+                <p className="font-mono text-[10px] uppercase tracking-[0.15em] mt-1" style={{ color: "var(--sage)" }}>
+                  Week of {weekLabel}
+                  {weeklyTotals && (
+                    <span style={{ color: "var(--text-muted)" }}>
+                      {" "}· {weeklyTotals.calories} kcal total · {weeklyTotals.protein_g}g protein ·{" "}
+                      {weeklyTotals.fiber_g}g fibre
+                    </span>
+                  )}
+                </p>
               )}
-            </p>
-          </div>
+            </div>
+          )}
 
           <div className="overflow-x-auto -mx-1 px-1">
-          <table className="w-full border-collapse" style={{ minWidth: `${Math.max(560, activeDays.length * 88 + 72)}px` }}>
-            <thead>
-              <tr>
-                {/* Row label column */}
-                <th className="w-[72px]" />
-                {activeDays.map((day, dayIdx) => {
-                  const revealed = dayIdx < revealCount;
-                  return (
-                    <th key={day} className="pb-2 px-1">
-                      {/* Day headers are always visible — unrevealed days show a pulse dot */}
-                      <div className="flex flex-col items-center gap-1">
-                        <span
-                          className="font-mono text-[10px] uppercase tracking-[0.18em]"
-                          style={{ color: "var(--sage)" }}
-                        >
-                          {DAY_SHORT[day]}
-                        </span>
-                        {revealed ? (
-                          onRegenerate && (
+            <table
+              className="w-full border-collapse"
+              style={{ minWidth: `${Math.max(560, days.length * 120 + 80)}px` }}
+            >
+              <thead>
+                <tr>
+                  <th className="w-[80px]" />
+                  {days.map((day, dayIdx) => {
+                    const revealed = dayIdx < revealCount;
+                    return (
+                      <th key={day} className="pb-2 px-1 min-w-[120px]">
+                        <div className="flex flex-col items-center gap-1">
+                          <span
+                            className="font-mono text-[10px] uppercase tracking-[0.18em]"
+                            style={{ color: "var(--sage)" }}
+                          >
+                            {DAY_LABELS[day] ?? day.slice(0, 3).toUpperCase()}
+                          </span>
+                          {revealed && onRegenerate ? (
                             <button
                               onClick={() => onRegenerate(day)}
                               disabled={isRegenerating}
@@ -249,40 +267,27 @@ export function WeeklyPlanGrid({
                             >
                               ↺
                             </button>
-                          )
-                        ) : (
-                          <span
-                            className="w-1 h-1 rounded-full animate-pulse"
-                            style={{ background: "var(--sage)", opacity: 0.4 }}
-                          />
-                        )}
-                      </div>
-                    </th>
-                  );
-                })}
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((row) => {
-                const key =
-                  row.kind === "meal"
-                    ? row.slot
-                    : row.kind === "juice"
-                    ? `juice_${row.index}`
-                    : row.kind === "extra"
-                    ? row.slot
-                    : "snacks";
-
-                return (
-                  <tr key={key}>
-                    <td className="pr-2 py-1 align-middle w-[72px]">
+                          ) : !revealed ? (
+                            <span
+                              className="w-1 h-1 rounded-full animate-pulse"
+                              style={{ background: "var(--sage)", opacity: 0.4 }}
+                            />
+                          ) : null}
+                        </div>
+                      </th>
+                    );
+                  })}
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((row) => (
+                  <tr key={row.id}>
+                    <td className="pr-2 py-1 align-middle w-[80px]">
                       {rowLabel(row)}
                     </td>
-
-                    {activeDays.map((day, dayIdx) => {
+                    {days.map((day, dayIdx) => {
                       const revealed = dayIdx < revealCount;
 
-                      // Unrevealed columns show a skeleton placeholder — not invisible content
                       if (!revealed) {
                         return (
                           <td key={day} className="p-0.5">
@@ -291,58 +296,23 @@ export function WeeklyPlanGrid({
                         );
                       }
 
-                      // ── Snacks row ──────────────────────────────────────
-                      if (row.kind === "snacks") {
-                        const snacks: string[] = days[day]?.snacks ?? [];
-                        return (
-                          <td key={day} className="px-0.5 pt-3 pb-1 align-top">
-                            {snacks.length > 0 ? (
-                              <p
-                                className="font-display text-[0.7rem] font-light italic leading-snug line-clamp-2"
-                                style={{ color: "var(--text-muted)" }}
-                              >
-                                {snacks.join(" · ")}
-                              </p>
-                            ) : (
-                              <span style={{ color: "var(--text-muted)", opacity: 0.3, fontSize: "0.7rem" }}>—</span>
-                            )}
-                          </td>
-                        );
-                      }
-
-                      // ── Meal row ────────────────────────────────────────
-                      if (row.kind === "meal") {
-                        const meal = days[day]?.[row.slot] as MealItem | null;
-                        const isSelected =
-                          selected?.day === day &&
-                          selected?.slot === row.slot &&
-                          selected?.slotType === "meal";
+                      if (isGenerating) {
                         return (
                           <td key={day} className="p-0.5">
-                            {meal ? (
-                              <MealCell
-                                meal={meal}
-                                isSelected={isSelected}
-                                onClick={() =>
-                                  setSelected(
-                                    isSelected ? null : { day, slotType: "meal", slot: row.slot }
-                                  )
-                                }
-                              />
-                            ) : (
-                              <EmptyCell />
-                            )}
+                            <GeneratingCell />
                           </td>
                         );
                       }
 
-                      // ── Juice row ───────────────────────────────────────
-                      if (row.kind === "juice") {
-                        const juice = (days[day]?.juices ?? [])[row.index] as MealItem | undefined;
+                      const content = getCellContent(day, row, plan);
+
+                      // Juice row
+                      if (row.type === "juice") {
+                        const juice = content as MealItem | null;
                         const isSelected =
                           selected?.day === day &&
                           selected?.slotType === "juice" &&
-                          selected?.index === row.index;
+                          selected?.index === row.slotIndex;
                         return (
                           <td key={day} className="p-0.5">
                             {juice ? (
@@ -353,7 +323,7 @@ export function WeeklyPlanGrid({
                                   setSelected(
                                     isSelected
                                       ? null
-                                      : { day, slotType: "juice", slot: `juice_${row.index}`, index: row.index }
+                                      : { day: day as DayName, slotType: "juice", slot: row.id, index: row.slotIndex }
                                   )
                                 }
                               />
@@ -364,14 +334,40 @@ export function WeeklyPlanGrid({
                         );
                       }
 
-                      // ── Extra row ───────────────────────────────────────
-                      const extra = (days[day]?.extras ?? []).find(
-                        (e: ExtraItem) => e.slot === row.slot
-                      ) as ExtraItem | undefined;
+                      // Meal row
+                      if (row.type === "meal") {
+                        const meal = content as MealItem | null;
+                        const isSelected =
+                          selected?.day === day &&
+                          selected?.slot === row.id &&
+                          selected?.slotType === "meal";
+                        return (
+                          <td key={day} className="p-0.5">
+                            {meal ? (
+                              <MealCell
+                                meal={meal}
+                                isSelected={isSelected}
+                                onClick={() =>
+                                  setSelected(
+                                    isSelected
+                                      ? null
+                                      : { day: day as DayName, slotType: "meal", slot: row.id }
+                                  )
+                                }
+                              />
+                            ) : (
+                              <EmptyCell />
+                            )}
+                          </td>
+                        );
+                      }
+
+                      // Extra row
+                      const extra = content as ExtraItem | null;
                       const isSelected =
                         selected?.day === day &&
                         selected?.slotType === "extra" &&
-                        selected?.slot === row.slot;
+                        selected?.slot === row.id;
                       return (
                         <td key={day} className="p-0.5">
                           {extra ? (
@@ -380,7 +376,9 @@ export function WeeklyPlanGrid({
                               isSelected={isSelected}
                               onClick={() =>
                                 setSelected(
-                                  isSelected ? null : { day, slotType: "extra", slot: row.slot }
+                                  isSelected
+                                    ? null
+                                    : { day: day as DayName, slotType: "extra", slot: row.id }
                                 )
                               }
                             />
@@ -391,35 +389,38 @@ export function WeeklyPlanGrid({
                       );
                     })}
                   </tr>
-                );
-              })}
-              <tr>
-                <td className="pr-2 pt-3 align-top w-[72px]">
-                  <span className="font-mono text-[8px] uppercase tracking-[0.12em]" style={{ color: "var(--sage)" }}>
-                    Daily
-                  </span>
-                </td>
-                {activeDays.map((day, dayIdx) => {
-                  const revealed = dayIdx < revealCount;
-                  const n = revealed ? getDayNutrition(plan, day) : null;
-                  return (
-                    <td key={`nutrition-${day}`} className="px-0.5 pt-2 pb-1 align-top">
-                      {!revealed ? (
-                        <div
-                          className="rounded-lg animate-pulse"
-                          style={{ height: "36px", background: "rgba(122,158,126,0.06)" }}
-                        />
-                      ) : n ? (
-                        <DayNutritionStrip nutrition={n} />
-                      ) : (
-                        <span className="text-[0.65rem]" style={{ color: "var(--text-muted)", opacity: 0.4 }}>—</span>
-                      )}
+                ))}
+
+                {/* Per-day nutrition row */}
+                {plan && (
+                  <tr>
+                    <td className="pr-2 pt-3 align-top w-[80px]">
+                      <span className="font-mono text-[8px] uppercase tracking-[0.12em]" style={{ color: "var(--sage)" }}>
+                        Daily
+                      </span>
                     </td>
-                  );
-                })}
-              </tr>
-            </tbody>
-          </table>
+                    {days.map((day, dayIdx) => {
+                      const revealed = dayIdx < revealCount;
+                      const n = revealed ? getDayNutrition(plan, day) : null;
+                      return (
+                        <td key={`nutrition-${day}`} className="px-0.5 pt-2 pb-1 align-top">
+                          {!revealed ? (
+                            <div
+                              className="rounded-lg animate-pulse"
+                              style={{ height: "36px", background: "rgba(122,158,126,0.06)" }}
+                            />
+                          ) : n ? (
+                            <DayNutritionStrip nutrition={n} />
+                          ) : (
+                            <span className="text-[0.65rem]" style={{ color: "var(--text-muted)", opacity: 0.4 }}>—</span>
+                          )}
+                        </td>
+                      );
+                    })}
+                  </tr>
+                )}
+              </tbody>
+            </table>
           </div>
         </div>
 
@@ -428,29 +429,22 @@ export function WeeklyPlanGrid({
           <div
             className="no-print w-full xl:w-[220px] flex-shrink-0 p-4 rounded-[14px] space-y-3 xl:sticky xl:top-4"
             style={{
-              background: selected.slotType === "juice"
-                ? "rgba(232,213,163,0.15)"
-                : "rgba(247,243,236,0.9)",
+              background: selected.slotType === "juice" ? "rgba(232,213,163,0.15)" : "rgba(247,243,236,0.9)",
               border: selected.slotType === "juice"
                 ? "1px solid rgba(232,213,163,0.4)"
                 : "1px solid rgba(122,158,126,0.2)",
             }}
           >
-            {/* Close */}
             <div className="flex items-center justify-between">
               <span
                 className="font-mono text-[9px] uppercase tracking-[0.15em]"
-                style={{
-                  color: selected.slotType === "juice"
-                    ? "#8b7035"
-                    : "var(--sage)",
-                }}
+                style={{ color: selected.slotType === "juice" ? "#8b7035" : "var(--sage)" }}
               >
                 {selected.slotType === "juice"
-                  ? `🥤 ${DAY_SHORT[selected.day]}`
+                  ? `🥤 ${DAY_LABELS[selected.day] ?? selected.day}`
                   : selected.slotType === "extra"
-                  ? `${EXTRA_SLOT_LABELS[selected.slot] ?? selected.slot} · ${DAY_SHORT[selected.day]}`
-                  : `${selected.slot} · ${DAY_SHORT[selected.day]}`}
+                  ? `${EXTRA_SLOT_LABELS[selected.slot] ?? selected.slot} · ${DAY_LABELS[selected.day] ?? selected.day}`
+                  : `${selected.slot} · ${DAY_LABELS[selected.day] ?? selected.day}`}
               </span>
               <button
                 onClick={() => setSelected(null)}
@@ -463,23 +457,14 @@ export function WeeklyPlanGrid({
               </button>
             </div>
 
-            {/* Name */}
-            <h4
-              className="font-display text-[0.95rem] font-light leading-snug"
-              style={{ color: "var(--deep-green)" }}
-            >
+            <h4 className="font-display text-[0.95rem] font-light leading-snug" style={{ color: "var(--deep-green)" }}>
               {detailMeal?.name ?? detailExtra?.name}
             </h4>
 
-            {/* Description */}
-            <p
-              className="font-display text-[0.78rem] font-light italic leading-relaxed"
-              style={{ color: "var(--text-muted)" }}
-            >
+            <p className="font-display text-[0.78rem] font-light italic leading-relaxed" style={{ color: "var(--text-muted)" }}>
               {detailMeal?.description ?? detailExtra?.description}
             </p>
 
-            {/* Tags */}
             {(detailMeal?.tags ?? []).length > 0 && (
               <div className="flex flex-wrap gap-1">
                 {(detailMeal?.tags ?? []).slice(0, 4).map((tag) => (
@@ -505,14 +490,12 @@ export function WeeklyPlanGrid({
               </div>
             )}
 
-            {/* Prep time */}
             {(detailMeal?.prep_minutes ?? detailExtra?.prep_minutes) && (
               <p className="font-mono text-[10px]" style={{ color: "var(--text-muted)" }}>
                 {detailMeal?.prep_minutes ?? detailExtra?.prep_minutes} min
               </p>
             )}
 
-            {/* Save to recipes — hidden when already saved or from user's own recipes */}
             {!isMealSaved && (onBookmark || onBookmarkJuice) && selected.slotType !== "extra" ? (
               <button
                 onClick={handleBookmark}
@@ -529,7 +512,6 @@ export function WeeklyPlanGrid({
               </button>
             ) : null}
 
-            {/* View recipe link */}
             {savedRecipeId && (
               <Link
                 href={`/recipes/${savedRecipeId}`}
@@ -546,165 +528,51 @@ export function WeeklyPlanGrid({
   );
 }
 
-// ── Row ordering ──────────────────────────────────────────────────────────────
+// ── Cell content lookup ────────────────────────────────────────────────────────
 
-/**
- * Detect which time-of-day a juice belongs to by inspecting its name + tags.
- * Returns a sort priority so rows appear in chronological order:
- *   morning (before breakfast=20) → 10
- *   pre-lunch (after breakfast, before lunch=40) → 30
- *   afternoon (after lunch, before dinner=60) → 50
- *   evening (after dinner) → 70
- */
-function juiceTimePriority(juice: MealItem | undefined): number {
-  if (!juice) return 99;
-  const haystack = [juice.name, ...(juice.tags ?? [])].join(" ").toLowerCase();
-  if (/(^|\s|_)(morning|breakfast)/i.test(haystack)) return 10;
-  if (/(pre.?lunch|before.?lunch)/i.test(haystack)) return 30;
-  if (/afternoon/i.test(haystack)) return 50;
-  if (/(evening|night|dinner)/i.test(haystack)) return 70;
-  return 99; // unknown — put at end
+function getCellContent(
+  day: string,
+  row: GridRow,
+  plan: MealPlan | null,
+): MealItem | ExtraItem | null {
+  const dayData = plan?.plan_data?.days?.[day as DayName];
+  if (!dayData) return null;
+
+  if (row.type === "juice" && row.slotIndex !== undefined) {
+    return dayData.juices?.[row.slotIndex] ?? null;
+  }
+  if (row.type === "extra") {
+    return dayData.extras?.find((e) => e.slot === row.id) ?? null;
+  }
+  return dayData[row.id as "breakfast" | "lunch" | "dinner"] ?? null;
 }
 
-const SLOT_PRIORITY: Record<string, number> = {
-  morning_snack: 15,
-  breakfast: 20,
-  lunch: 40,
-  afternoon_snack: 55,
-  dinner: 60,
-  morning_juice: 10, // extra slot
-  evening_tea: 75,
-  snacks: 90,
-};
+// ── Row label ─────────────────────────────────────────────────────────────────
 
-type RowDef =
-  | { kind: "meal"; slot: MealSlot }
-  | { kind: "juice"; index: number; label: string; priority: number }
-  | { kind: "extra"; slot: string }
-  | { kind: "snacks" };
-
-function buildRows(
-  days: Record<string, DayPlan>,
-  activeDays: DayName[],
-  solidSlots: MealSlot[],
-  maxJuices: number,
-  extraSlots: string[],
-): RowDef[] {
-  const rows: RowDef[] = [];
-
-  // Solid meals
-  for (const slot of solidSlots) {
-    rows.push({ kind: "meal", slot, });
-  }
-
-  // Juices — detect time priority from the first day that has this juice
-  for (let i = 0; i < maxJuices; i++) {
-    const sample = activeDays.map((d) => (days[d]?.juices ?? [])[i]).find(Boolean);
-    const priority = juiceTimePriority(sample);
-    const label = sample
-      ? (sample.tags ?? []).find((t) =>
-          /morning|pre.?lunch|afternoon|evening/i.test(t)
-        ) ?? `Juice ${i + 1}`
-      : `Juice ${i + 1}`;
-    rows.push({ kind: "juice", index: i, label, priority });
-  }
-
-  // Extras
-  for (const slot of extraSlots) {
-    rows.push({ kind: "extra", slot });
-  }
-
-  // Snacks
-  if (activeDays.some((d) => (days[d]?.snacks ?? []).length > 0)) {
-    rows.push({ kind: "snacks" });
-  }
-
-  // Sort by time-of-day priority
-  rows.sort((a, b) => {
-    const pa =
-      a.kind === "meal"
-        ? SLOT_PRIORITY[a.slot] ?? 50
-        : a.kind === "juice"
-        ? a.priority
-        : a.kind === "extra"
-        ? SLOT_PRIORITY[a.slot] ?? 80
-        : 90; // snacks
-    const pb =
-      b.kind === "meal"
-        ? SLOT_PRIORITY[b.slot] ?? 50
-        : b.kind === "juice"
-        ? b.priority
-        : b.kind === "extra"
-        ? SLOT_PRIORITY[b.slot] ?? 80
-        : 90;
-    return pa - pb;
-  });
-
-  return rows;
-}
-
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-function rowLabel(row: RowDef): React.ReactNode {
-  if (row.kind === "meal") {
-    return (
-      <span
-        className="font-mono text-[9px] uppercase tracking-[0.15em]"
-        style={{ color: "var(--text-muted)" }}
-      >
-        {row.slot.slice(0, 5)}
-      </span>
-    );
-  }
-  if (row.kind === "juice") {
-    const label = row.label.replace(/_/g, "-");
+function rowLabel(row: GridRow): React.ReactNode {
+  if (row.type === "juice") {
     return (
       <span
         className="font-mono text-[9px] uppercase tracking-[0.13em] leading-snug"
         style={{ color: "#8b7035" }}
       >
-        🥤 {label}
-      </span>
-    );
-  }
-  if (row.kind === "extra") {
-    const short = EXTRA_SLOT_LABELS[row.slot]?.split(" ")[0] ?? row.slot;
-    return (
-      <span
-        className="font-mono text-[9px] uppercase tracking-[0.13em]"
-        style={{ color: "var(--sage)" }}
-      >
-        {short}
+        🥤 {row.label.toLowerCase()}
       </span>
     );
   }
   return (
-    <span className="font-mono text-[9px] uppercase tracking-[0.15em]" style={{ color: "var(--text-muted)" }}>
-      Snacks
+    <span
+      className="font-mono text-[9px] uppercase tracking-[0.15em]"
+      style={{ color: row.type === "extra" ? "var(--sage)" : "var(--text-muted)" }}
+    >
+      {row.label}
     </span>
   );
 }
 
-// ── Re-export DayPlan type alias for internal use ────────────────────────────
-type DayPlan = {
-  breakfast?: MealItem | null;
-  lunch?: MealItem | null;
-  dinner?: MealItem | null;
-  juices?: MealItem[];
-  extras?: ExtraItem[];
-  snacks?: string[];
-  [key: string]: unknown;
-};
+// ── Cell components ───────────────────────────────────────────────────────────
 
-function MealCell({
-  meal,
-  isSelected,
-  onClick,
-}: {
-  meal: MealItem;
-  isSelected: boolean;
-  onClick: () => void;
-}) {
+function MealCell({ meal, isSelected, onClick }: { meal: MealItem; isSelected: boolean; onClick: () => void }) {
   const isRaw = meal.type === "raw";
   return (
     <button
@@ -736,7 +604,7 @@ function MealCell({
         <p className="font-mono text-[9px]" style={{ color: "var(--text-muted)" }}>
           {meal.prep_minutes}m
         </p>
-        {meal.source === "user_recipe" && (
+        {meal.source === "user_recipe" && !!meal.recipe_id && (
           <span
             className="font-display text-[8px] px-1 rounded"
             style={{ background: "rgba(45,74,53,0.1)", color: "var(--deep-green)" }}
@@ -749,15 +617,7 @@ function MealCell({
   );
 }
 
-function JuiceCell({
-  juice,
-  isSelected,
-  onClick,
-}: {
-  juice: MealItem;
-  isSelected: boolean;
-  onClick: () => void;
-}) {
+function JuiceCell({ juice, isSelected, onClick }: { juice: MealItem; isSelected: boolean; onClick: () => void }) {
   return (
     <button
       onClick={onClick}
@@ -768,10 +628,7 @@ function JuiceCell({
         minHeight: "72px",
       }}
     >
-      <p
-        className="font-display text-[0.75rem] font-light leading-snug line-clamp-2 mb-1.5"
-        style={{ color: "#8b7035" }}
-      >
+      <p className="font-display text-[0.75rem] font-light leading-snug line-clamp-2 mb-1.5" style={{ color: "#8b7035" }}>
         {juice.name}
       </p>
       <p className="font-mono text-[9px]" style={{ color: "#a8924a" }}>
@@ -781,15 +638,7 @@ function JuiceCell({
   );
 }
 
-function ExtraCell({
-  extra,
-  isSelected,
-  onClick,
-}: {
-  extra: ExtraItem;
-  isSelected: boolean;
-  onClick: () => void;
-}) {
+function ExtraCell({ extra, isSelected, onClick }: { extra: ExtraItem; isSelected: boolean; onClick: () => void }) {
   return (
     <button
       onClick={onClick}
@@ -800,10 +649,7 @@ function ExtraCell({
         minHeight: "72px",
       }}
     >
-      <p
-        className="font-display text-[0.75rem] font-light leading-snug line-clamp-2 mb-1.5"
-        style={{ color: "var(--deep-green)" }}
-      >
+      <p className="font-display text-[0.75rem] font-light leading-snug line-clamp-2 mb-1.5" style={{ color: "var(--deep-green)" }}>
         {extra.name}
       </p>
       <p className="font-mono text-[9px]" style={{ color: "var(--text-muted)" }}>
@@ -816,25 +662,31 @@ function ExtraCell({
 function EmptyCell() {
   return (
     <div
-      className="w-full rounded-lg"
+      className="w-full rounded-lg h-[88px]"
       style={{
-        minHeight: "72px",
         background: "rgba(122,158,126,0.03)",
-        border: "1px dashed rgba(122,158,126,0.1)",
+        border: "1px solid rgba(122,158,126,0.12)",
       }}
     />
   );
 }
 
-/** Skeleton shown for a day column that hasn't been revealed yet. */
 function RevealingCell() {
   return (
     <div
-      className="w-full rounded-lg animate-pulse"
+      className="w-full rounded-lg h-[88px] animate-pulse"
+      style={{ background: "rgba(122,158,126,0.08)" }}
+    />
+  );
+}
+
+function GeneratingCell() {
+  return (
+    <div
+      className="w-full rounded-lg h-[88px] animate-pulse"
       style={{
-        minHeight: "72px",
         background: "rgba(122,158,126,0.08)",
-        border: "1px solid rgba(122,158,126,0.1)",
+        border: "1px solid rgba(122,158,126,0.15)",
       }}
     />
   );

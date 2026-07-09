@@ -221,7 +221,7 @@ export default function DashboardLayout({
 
       {/* Page content — scrollable by default; full-height pages control their own overflow */}
       <main className="flex-1 overflow-y-auto min-h-0">
-        <div className="max-w-5xl mx-auto px-4 py-6 md:px-8 md:py-8 md:h-full">
+        <div className="w-full px-4 py-6 md:px-6 md:py-8 md:h-full">
           {children}
         </div>
       </main>

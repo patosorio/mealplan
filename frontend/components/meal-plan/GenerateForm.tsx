@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { ExtraSlot, GeneratePlanRequest, JuiceEntry, JuicingConfig, MealSlot, RecipeUsagePolicyMode } from "@/lib/types";
 import { DIET_OPTIONS, RAW_COOKED_OPTIONS, type DietType, type RawCookedRatio } from "@/lib/diet-types";
 import {
@@ -9,9 +9,18 @@ import {
   snapToMonday,
 } from "@/lib/meal-plan-utils";
 
+export type FormGridConfig = {
+  planDays: number;
+  meals: string[];
+  extras: string[];
+  juicingEnabled: boolean;
+  juiceLabels: string[];
+};
+
 interface GenerateFormProps {
   onSubmit: (request: GeneratePlanRequest) => void;
   isLoading?: boolean;
+  onConfigChange?: (config: FormGridConfig) => void;
 }
 
 const EXTRA_OPTIONS: { slot: ExtraSlot; label: string; hint: string }[] = [
@@ -36,7 +45,7 @@ function emptyJuice(): JuiceEntry {
   return { label: "Morning", size_oz: 16, size_label: "16oz / 500ml" };
 }
 
-export function GenerateForm({ onSubmit, isLoading = false }: GenerateFormProps) {
+export function GenerateForm({ onSubmit, isLoading = false, onConfigChange }: GenerateFormProps) {
   const [tab, setTab] = useState<Tab>("setup");
 
   // Setup tab state
@@ -60,6 +69,16 @@ export function GenerateForm({ onSubmit, isLoading = false }: GenerateFormProps)
   const [solidMeals, setSolidMeals] = useState<MealSlot[]>([]);
 
   const [errors, setErrors] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    onConfigChange?.({
+      planDays,
+      meals: juicingMode ? solidMeals : ["breakfast", "lunch", "dinner"],
+      extras: selectedExtras,
+      juicingEnabled: juicingMode && juices.length > 0,
+      juiceLabels: juices.map((j) => j.label),
+    });
+  }, [planDays, selectedExtras, juicingMode, juices, solidMeals, onConfigChange]);
 
   function toggleExtra(slot: ExtraSlot) {
     setSelectedExtras((prev) =>
